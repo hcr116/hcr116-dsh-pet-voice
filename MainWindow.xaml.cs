@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -75,6 +75,8 @@ public partial class MainWindow : Window
             StartBridge();
             _clock.Tick += (_, _) => TickReminders();
             _clock.Start();
+            _hotkeyTick.Tick += OnHotkeyTick;
+            _hotkeyTick.Start();
             _bubbleHide.Tick += (_, _) => { _bubbleHide.Stop(); HideBubble(); };
             Say(_store.Items.Count > 0
                 ? $"本鲸在。今天记着 {_store.Items.Count(x => x.Enabled)} 条提醒。"
@@ -86,11 +88,6 @@ public partial class MainWindow : Window
         PetImage.MouseMove += OnPetMouseMove;
         PetImage.MouseLeftButtonUp += OnPetMouseUp;
         PetImage.LostMouseCapture += OnPetLostCapture;
-        // 双保险：松左键这件事在窗口这一层也接一次（PetImage 那条偶尔会丢）
-        PreviewMouseLeftButtonUp += (_, _) =>
-        {
-            if (_listening && !_dragging) EndListen(send: true);
-        };
         PetImage.MouseWheel += OnPetWheel;
         PetImage.ContextMenu = BuildContextMenu();
     }
@@ -597,13 +594,20 @@ public partial class MainWindow : Window
         Say("唔……还在想。");
     }
 
-    private void OpenAddReminder()    {
-        var dlg = new AddReminderWindow { Owner = IsVisible ? this : null };
-        if (dlg.ShowDialog() == true && dlg.Result != null)
+    private void OpenAddReminder()
+    {
+        // 弹窗期间别抢热键：这里可能要打字母 U
+        _modalOpen = true;
+        try
         {
-            _store.Add(dlg.Result);
-            Say($"记下了：{dlg.Result.Label} {dlg.Result.Text}");
+            var dlg = new AddReminderWindow { Owner = IsVisible ? this : null };
+            if (dlg.ShowDialog() == true && dlg.Result != null)
+            {
+                _store.Add(dlg.Result);
+                Say($"记下了：{dlg.Result.Label} {dlg.Result.Text}");
+            }
         }
+        finally { _modalOpen = false; }
     }
 
     private static void OpenFolder(string path)
@@ -664,7 +668,7 @@ public partial class MainWindow : Window
         });
     }
 
-    // ---------------- 按住左键说话 ----------------
+    // ---------------- 按住 U 说话 ----------------
 
     private Recorder? _rec;
     private bool _listening;
@@ -681,15 +685,13 @@ public partial class MainWindow : Window
             ToggleVisible();
             return;
         }
-        // ⚠ 用真实光标屏幕坐标，不要用 PointToScreen(e.GetPosition(this))：
-        //   气泡展开时窗口会被自动往上顶（见「别跑出屏幕」那段），窗口一动相对坐标就跟着漂，
-        //   按一下就被判成「拖了 68 像素」→ 录音白丢。
+        // 鼠标只管拖动（2026-10-26 改：说话挪到按住 U 键，两件事不再抢左键）。
+        // 阈值放到 6 像素：不再需要"移动代表不想说话"那套判定，手一抖就是拖。
         _downScreen = 桌标点位();
         _winAtDown = new System.Windows.Point(Left, Top);
         _dragging = false;
         PetImage.CaptureMouse();
         e.Handled = true;
-        BeginListen();
     }
 
     /// <summary>光标在屏幕上的位置，不受窗口自己挪动影响。</summary>
@@ -707,12 +709,10 @@ public partial class MainWindow : Window
         var now = 桌标点位();
         var dx = now.X - _downScreen.X;
         var dy = now.Y - _downScreen.Y;
-        if (Math.Abs(dx) < 16 && Math.Abs(dy) < 16) return;
+        if (Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
 
-        // 动了就是想挪位置，不是在说话：录音丢掉，别白认一遍
+        // 只挪窗口，不碰录音：录音由 U 键管
         _dragging = true;
-        Log($"拖窗口（dx={dx:F0} dy={dy:F0}），这次录音丢掉");
-        CancelListen();
         Left = _winAtDown.X + dx;
         Top = _winAtDown.Y + dy;
     }
@@ -732,9 +732,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_listening) EndListen(send: true);
-        else if (_cfg.Bridge is not { Enabled: true })
-            Say("先在右键菜单里打开「连本鲸」，本鲸才听得见。");
+        // 只是点了一下（没拖动）：提示怎么说话，别让它看着像个坏按钮
+        if (!_listening)
+        {
+            if (_cfg.Bridge is { Enabled: true })
+                Say($"按住 {HotkeyName()} 跟本鲸说话，拖着就能挪位置。");
+            else
+                Say("先在右键菜单里打开「连本鲸」，本鲸才听得见。");
+        }
     }
 
     private void OnPetLostCapture(object sender, System.Windows.Input.MouseEventArgs e)
@@ -742,7 +747,67 @@ public partial class MainWindow : Window
         // ⚠ 别在这里取消录音。鼠标一松手，WPF 会自己先释放捕获，
         // LostMouseCapture 比 MouseLeftButtonUp 先到 —— 在这里 CancelListen 就等于
         // "每次松手都把刚说的话吞掉"（2026-10-25 实测：日志里全是 listen start → listen cancel）。
-        // 收尾交给 OnPetMouseUp；它万一没来，_listenTick 会看左键还按着没，兜底收掉。
+        // 收尾交给热键轮询：键一松就 EndListen，_listenTick 再兜一次底。
+    }
+
+    // ---------------- 按住 U 说话（全局热键，鼠标只管拖动） ----------------
+
+    private bool _modalOpen;
+
+    private readonly System.Windows.Threading.DispatcherTimer _hotkeyTick =
+        new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private bool _hotkeyWasDown;
+
+    /// <summary>配置里的热键名（"U" / "u" / "F8"），认不出来就当 U。</summary>
+    private string HotkeyName() =>
+        string.IsNullOrWhiteSpace(_cfg.Hotkey) ? "U" : _cfg.Hotkey.Trim().ToUpperInvariant();
+
+    /// <summary>把热键名翻译成虚拟键码；只支持单个字母/数字，别的都给 0x55(U)。</summary>
+    private int HotkeyVk()
+    {
+        var name = HotkeyName();
+        if (name.Length == 1)
+        {
+            var ch = name[0];
+            if (ch is >= 'A' and <= 'Z') return 0x41 + (ch - 'A');
+            if (ch is >= '0' and <= '9') return 0x30 + (ch - '0');
+        }
+        return 0x55; // U
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private static bool VkDown(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    /// <summary>热键这会儿是不是按着（Ctrl/Alt/Shift/Win 一起按着不算，免得抢输入法/系统快捷键）。</summary>
+    private bool HotkeyDown()
+    {
+        if (VkDown(0x11) || VkDown(0x12) || VkDown(0x10) || VkDown(0x5B) || VkDown(0x5C)) return false;
+        return VkDown(HotkeyVk());
+    }
+
+    private void OnHotkeyTick(object? sender, EventArgs e)
+    {
+        // 自己在弹「加提醒」窗口时别抢键：那里可能要打字母 U
+        if (_modalOpen) { _hotkeyWasDown = false; return; }
+        if (!IsVisible) { _hotkeyWasDown = false; return; }
+
+        var down = HotkeyDown();
+        if (down == _hotkeyWasDown) return;
+        _hotkeyWasDown = down;
+
+        if (down)
+        {
+            if (_listening || _dragging) return;
+            if (_cfg.Bridge is not { Enabled: true })
+            {
+                Say("先在右键菜单里打开「连本鲸」，本鲸才听得见。");
+                return;
+            }
+            BeginListen();
+        }
+        else EndListen(send: true);
     }
 
     private void BeginListen()
@@ -785,7 +850,7 @@ public partial class MainWindow : Window
 
         if (!send || wav == null)
         {
-            if (send && 秒.TotalSeconds < 0.4) Say("太短了，按住左键再说。");
+            if (send && 秒.TotalSeconds < 0.4) Say($"太短了，按住 {HotkeyName()} 再说。");
             return;
         }
         // 一声没出（比如按着发呆、麦克风根本没开）：别拿去认，认出来也是瞎编
@@ -828,11 +893,10 @@ public partial class MainWindow : Window
         var 秒 = (DateTime.Now - _listenStart).TotalSeconds;
         ListenText.Text = $"正在听 {秒:F0}s";
 
-        // 兜底：左键已经松了但 MouseLeftButtonUp 没送到（窗口失焦、捕获被抢）——
-        // 就按"说完了"处理，别把录到的话白丢。
-        if (Mouse.LeftButton == MouseButtonState.Released)
+        // 兜底：热键已经松开但轮询没轮到（切换桌面、锁屏）——按"说完了"处理，别白丢。
+        if (!HotkeyDown())
         {
-            Log("左键已松开但没收到 MouseUp，按说完处理");
+            Log($"{HotkeyName()} 已松开，按说完处理");
             EndListen(send: true);
         }
     }

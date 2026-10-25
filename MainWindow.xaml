@@ -1,4 +1,4 @@
-<Window x:Class="DafeiyuPet.MainWindow"
+﻿<Window x:Class="DafeiyuPet.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="大肥鱼桌宠"
@@ -50,7 +50,7 @@
             <Image x:Name="PetImage" Source="assets/feiyu.png" Width="230" Height="228"
                    Stretch="Uniform" Cursor="Hand"
                    RenderOptions.BitmapScalingMode="HighQuality"
-                   ToolTip="按住左键：跟她说话 · 拖动：挪位置 · 双击：收起 · 右键：菜单 · 滚轮：缩放"/>
+                   ToolTip="按住 U：跟她说话 · 拖动：挪位置 · 双击：收起 · 右键：菜单 · 滚轮：缩放"/>
 
             <!-- 正在听：按住左键时冒出来的一小块。以后要换动态表情，先这么着。 -->
             <Border x:Name="ListenBadge" Visibility="Collapsed" VerticalAlignment="Top"

@@ -15,6 +15,8 @@ public sealed class PetConfig
     public double? Top { get; set; }
     /// <summary>窗口缩放（1 = 原始大小）。</summary>
     public double Scale { get; set; } = 1.0;
+    /// <summary>按住说话的热键：单个字母/数字，默认 U。改了要重启。</summary>
+    public string Hotkey { get; set; } = "U";
     /// <summary>语音（本地合成，不联网不花钱）。</summary>
     public VoiceConfig Voice { get; set; } = new();
     /// <summary>跟本鲸说话（DSH 里的 dsh-pet-bridge 插件）。</summary>
