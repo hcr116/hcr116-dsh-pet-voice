@@ -66,6 +66,42 @@ public static class Voice
 
         var mySeq = System.Threading.Interlocked.Increment(ref _seq);
 
+        // 三条嗓子：local = 本地 GPT-SoVITS（最像人），azure = 微软神经语音，其余 = 本地 SAPI。
+        // 前面两条失败（服务没开、没网、key 过期）就当场退回 SAPI，别让人干等着没声。
+        if (string.Equals(cfg.Provider, "local", StringComparison.OrdinalIgnoreCase))
+        {
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                var 错 = await GptSovits.SpeakAsync(clean, cfg, log).ConfigureAwait(false);
+                if (错 != null)
+                {
+                    log("voice[local] 没成，退回 SAPI：" + 错);
+                    SapiWork(clean, cfg, log, mySeq);
+                }
+            });
+            return;
+        }
+
+        if (string.Equals(cfg.Provider, "azure", StringComparison.OrdinalIgnoreCase))
+        {
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                var 错 = await AzureVoice.SpeakAsync(clean, cfg, log).ConfigureAwait(false);
+                if (错 != null)
+                {
+                    log("voice[azure] 没成，退回 SAPI：" + 错);
+                    SapiWork(clean, cfg, log, mySeq);
+                }
+            });
+            return;
+        }
+
+        // 放到后台 MTA 线程跑：SAPI 在这台机器上只有干净线程才喘气
+        System.Threading.Tasks.Task.Run(() => SapiWork(clean, cfg, log, mySeq));
+    }
+
+    private static void SapiWork(string clean, VoiceConfig cfg, Action<string> log, int mySeq)
+    {
         void Work()
         {
             try
@@ -106,8 +142,7 @@ public static class Voice
             }
         }
 
-        // 放到后台 MTA 线程跑：SAPI 在这台机器上只有干净线程才喘气
-        System.Threading.Tasks.Task.Run(Work);
+        Work();
     }
 
     /// <summary>按名字挑音色；没指定就挑中文（Huihui 优先）。</summary>
@@ -167,6 +202,8 @@ public static class Voice
             System.Threading.Interlocked.Increment(ref _seq);
             try { _player?.Stop(); } catch { }
         }
+        try { AzureVoice.Stop(); } catch { }
+        try { GptSovits.Stop(); } catch { }
     }
 
     /// <summary>给裸 PCM 套 WAV 头，SoundPlayer 才认。</summary>

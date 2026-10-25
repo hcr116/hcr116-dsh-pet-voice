@@ -15,12 +15,15 @@ public partial class MainWindow : Window
     private readonly PetConfig _cfg;
     private ReminderStore _store;
     private OutboxWatcher? _feed;
+    private PetBridge? _bridge;
 
     private WinForms.NotifyIcon? _tray;
     private WinForms.ToolStripMenuItem? _muteItem;
     private WinForms.ToolStripMenuItem? _linkItem;
     private WinForms.ToolStripMenuItem? _showItem;
     private WinForms.ToolStripMenuItem? _voiceItem;
+    private WinForms.ToolStripMenuItem? _bridgeItem;
+    private WinForms.ToolStripMenuItem? _switchVoiceItem;
 
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(15) };
     private readonly DispatcherTimer _bubbleHide = new();
@@ -67,7 +70,9 @@ public partial class MainWindow : Window
             RestorePlacement();
             StartIdleAnimations();
             BuildTray();
+            _feedWatch.Tick += OnFeedWatchTick;
             StartFeed();
+            StartBridge();
             _clock.Tick += (_, _) => TickReminders();
             _clock.Start();
             _bubbleHide.Tick += (_, _) => { _bubbleHide.Stop(); HideBubble(); };
@@ -78,6 +83,14 @@ public partial class MainWindow : Window
 
         try { _reminderMtime = File.GetLastWriteTime(PetConfig.ReminderPath); } catch { }
         PetImage.MouseLeftButtonDown += OnPetMouseDown;
+        PetImage.MouseMove += OnPetMouseMove;
+        PetImage.MouseLeftButtonUp += OnPetMouseUp;
+        PetImage.LostMouseCapture += OnPetLostCapture;
+        // 双保险：松左键这件事在窗口这一层也接一次（PetImage 那条偶尔会丢）
+        PreviewMouseLeftButtonUp += (_, _) =>
+        {
+            if (_listening && !_dragging) EndListen(send: true);
+        };
         PetImage.MouseWheel += OnPetWheel;
         PetImage.ContextMenu = BuildContextMenu();
     }
@@ -313,6 +326,7 @@ public partial class MainWindow : Window
         m.Items.Add(_showItem);
 
         m.Items.Add(new WinForms.ToolStripMenuItem("加提醒…", null, (_, _) => OpenAddReminder()));
+        m.Items.Add(new WinForms.ToolStripMenuItem("跟本鲸说话…", null, (_, _) => AskBridge()));
         m.Items.Add(new WinForms.ToolStripMenuItem("打开提醒文件", null, (_, _) => OpenFolder(PetConfig.ReminderPath)));
 
         m.Items.Add(new WinForms.ToolStripSeparator());
@@ -322,6 +336,12 @@ public partial class MainWindow : Window
             CheckOnClick = false,
         };
         m.Items.Add(_linkItem);
+
+        _bridgeItem = new WinForms.ToolStripMenuItem("连本鲸（DSH 那边）", null, (_, _) => ToggleBridge())
+        {
+            CheckOnClick = false,
+        };
+        m.Items.Add(_bridgeItem);
 
         _muteItem = new WinForms.ToolStripMenuItem("静音 1 小时", null, (_, _) => ToggleMute())
         {
@@ -335,6 +355,14 @@ public partial class MainWindow : Window
         };
         m.Items.Add(_voiceItem);
 
+        _switchVoiceItem = new WinForms.ToolStripMenuItem("换嗓子…", null, (_, _) => SwitchVoice())
+        {
+            CheckOnClick = false,
+        };
+        m.Items.Add(_switchVoiceItem);
+
+        m.Items.Add(new WinForms.ToolStripMenuItem("试听嗓子", null, (_, _) => Say(AzureVoice.Sample)));
+
         m.Items.Add(new WinForms.ToolStripMenuItem("打开配置文件夹", null, (_, _) => OpenFolder(PetConfig.Dir)));
 
         m.Items.Add(new WinForms.ToolStripSeparator());
@@ -347,6 +375,7 @@ public partial class MainWindow : Window
         var menu = new ContextMenu();
         menu.Items.Add(Item("加提醒…", (_, _) => OpenAddReminder()));
         menu.Items.Add(Item("说两句", (_, _) => Say(IdleLines[Rng.Next(IdleLines.Length)])));
+        menu.Items.Add(Item("跟本鲸说话…", (_, _) => AskBridge()));
         menu.Items.Add(Item("打开提醒文件", (_, _) => OpenFolder(PetConfig.ReminderPath)));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("朗读（开/关）", (_, _) => ToggleVoice()));
@@ -365,6 +394,68 @@ public partial class MainWindow : Window
         SaveConfig();
         RefreshMenuLabels();
         Say(_cfg.Voice.Enabled ? "好，那本鲸说话给你听。" : "唔……那就不出声了。");
+    }
+
+    private void SwitchVoice()
+    {
+        _cfg.Voice ??= new VoiceConfig();
+        var v = _cfg.Voice;
+        var 现在 = (v.Provider ?? "sapi").ToLowerInvariant();
+        var 有key = !string.IsNullOrWhiteSpace(v.AzureKey);
+
+        switch (现在)
+        {
+            case "sapi":
+                v.Provider = "local";
+                v.Enabled = true;
+                Voice.Stop();
+                SaveConfig();
+                RefreshMenuLabels();
+                Say("换成本地克隆嗓。唔，这个要服务开着才有声。");
+                _ = 试听本地嗓();
+                return;
+
+            case "local":
+                if (有key)
+                {
+                    v.Provider = "azure";
+                    v.Enabled = true;
+                    Voice.Stop();
+                    SaveConfig();
+                    RefreshMenuLabels();
+                    Say(AzureVoice.Sample);
+                    return;
+                }
+                v.Provider = "sapi";
+                Voice.Stop();
+                SaveConfig();
+                RefreshMenuLabels();
+                Say("换回本地嗓子。官方那条没 key，先用不了。");
+                return;
+
+            default:
+                v.Provider = "sapi";
+                Voice.Stop();
+                SaveConfig();
+                RefreshMenuLabels();
+                Say("换回本地嗓子。唔，这个听着是有点硬。");
+                return;
+        }
+    }
+
+    private async Task 试听本地嗓()
+    {
+        var 在 = await GptSovits.PingAsync(_cfg.Voice?.LocalUrl).ConfigureAwait(true);
+        if (!在)
+        {
+            Log("换嗓子: GPT-SoVITS 服务没起 (9880)");
+            Say("本地克隆嗓的服务没开着，先退回原来那条。");
+            _cfg.Voice!.Provider = "sapi";
+            SaveConfig();
+            RefreshMenuLabels();
+            return;
+        }
+        Say(AzureVoice.Sample);
     }
 
     private void SaveConfig()
@@ -391,7 +482,29 @@ public partial class MainWindow : Window
         {
             var on = _cfg.Voice?.Enabled ?? false;
             _voiceItem.Checked = on;
-            _voiceItem.Text = on ? "朗读（本地语音，开着）" : "朗读（本地语音，关着）";
+            var 嗓 = (_cfg.Voice?.Provider ?? "sapi").ToLowerInvariant() switch
+            {
+                "local" => "克隆",
+                "azure" => "官方",
+                _ => "本地",
+            };
+            _voiceItem.Text = on ? $"朗读（{嗓}语音，开着）" : $"朗读（{嗓}语音，关着）";
+        }
+        if (_switchVoiceItem != null)
+        {
+            var 现在 = (_cfg.Voice?.Provider ?? "sapi").ToLowerInvariant() switch
+            {
+                "local" => "克隆嗓",
+                "azure" => $"官方 {_cfg.Voice?.AzureVoice}",
+                _ => "本地 SAPI",
+            };
+            _switchVoiceItem.Text = $"换嗓子…（现在：{现在}）";
+        }
+        if (_bridgeItem != null)
+        {
+            var on = _cfg.Bridge is { Enabled: true };
+            _bridgeItem.Checked = on;
+            _bridgeItem.Text = on ? "连本鲸（DSH 那边，开着）" : "连本鲸（DSH 那边，关着）";
         }
     }
 
@@ -420,8 +533,71 @@ public partial class MainWindow : Window
         RefreshMenuLabels();
     }
 
-    private void OpenAddReminder()
+    // ---------------- 跟本鲸说话（DSH 的 dsh-pet-bridge）----------------
+
+    private void StartBridge()
     {
+        if (_cfg.Bridge is not { Enabled: true }) return;
+        _bridge = new PetBridge(_cfg);
+        _bridge.Reply += text => Dispatcher.Invoke(() =>
+        {
+            Log("bridge reply: " + text);
+            _think?.Cancel();      // 真话来了，「在想」那句就别再冒了
+            Say(text, "dsh");
+        });
+        _bridge.Error += msg => Dispatcher.Invoke(() => Say(msg, "error"));
+        _bridge.Start();
+    }
+
+    private void ToggleBridge()
+    {
+        _cfg.Bridge ??= new BridgeConfig();
+        _cfg.Bridge.Enabled = !_cfg.Bridge.Enabled;
+        SaveConfig();
+        _bridge?.Stop();
+        _bridge = null;
+        if (_cfg.Bridge.Enabled) StartBridge();
+        Say(_cfg.Bridge.Enabled ? "连上本鲸了，可以跟她说话。" : "本鲸先不连了。");
+        RefreshMenuLabels();
+    }
+
+    /// <summary>右键「跟本鲸说话…」：输入一句话递过去。</summary>
+    private void AskBridge()
+    {
+        if (_cfg.Bridge is not { Enabled: true })
+        {
+            Say("先在菜单里把「连本鲸」打开。");
+            return;
+        }
+        var text = Microsoft.VisualBasic.Interaction.InputBox(
+            "想跟本鲸说什么？", "跟本鲸说话", "", -1, -1);
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _ = SendToBridgeAsync(text.Trim());
+    }
+
+    private CancellationTokenSource? _think;
+
+    private async Task SendToBridgeAsync(string text)
+    {
+        _bridge ??= new PetBridge(_cfg);
+        // 递出去的时候别急着说话：先安静等她的回答，8 秒还没动静才冒一句
+        _bridge.只念新的();
+        var err = await _bridge.SendAsync(text).ConfigureAwait(true);
+        if (!string.IsNullOrWhiteSpace(err))
+        {
+            Say("递不过去：" + err, "error");
+            return;
+        }
+
+        _think?.Cancel();
+        var cts = _think = new CancellationTokenSource();
+        try { await Task.Delay(TimeSpan.FromSeconds(8), cts.Token).ConfigureAwait(true); }
+        catch (OperationCanceledException) { return; }
+        if (cts.IsCancellationRequested) return;
+        Say("唔……还在想。");
+    }
+
+    private void OpenAddReminder()    {
         var dlg = new AddReminderWindow { Owner = IsVisible ? this : null };
         if (dlg.ShowDialog() == true && dlg.Result != null)
         {
@@ -449,6 +625,20 @@ public partial class MainWindow : Window
         _feed.Item += OnFeedItem;
         _feed.Error += msg => Dispatcher.Invoke(() => Say(msg, "error"));
         _feed.Start();
+        _feedWatch.Start();
+    }
+
+    // 看门狗：两分钟没成功取过一次，就当 ssh 卡死了，整个换一个新的监听
+    private readonly DispatcherTimer _feedWatch = new() { Interval = TimeSpan.FromSeconds(60) };
+
+    private void OnFeedWatchTick(object? sender, EventArgs e)
+    {
+        if (_feed == null || !_cfg.Ssh.Enabled) return;
+        var idle = DateTime.Now - _feed.LastOk;
+        if (idle < TimeSpan.FromMinutes(2)) return;
+        Log($"outbox 两分钟没动静（{idle.TotalSeconds:F0}s），重开监听");
+        try { _feed.Stop(); } catch { }
+        StartFeed();
     }
 
     private void OnFeedItem(FeedItem it)
@@ -474,7 +664,15 @@ public partial class MainWindow : Window
         });
     }
 
-    // ---------------- 生命周期 ----------------
+    // ---------------- 按住左键说话 ----------------
+
+    private Recorder? _rec;
+    private bool _listening;
+    private bool _dragging;
+    private System.Windows.Point _downScreen;
+    private System.Windows.Point _winAtDown;
+    private DateTime _listenStart;
+    private readonly DispatcherTimer _listenTick = new() { Interval = TimeSpan.FromMilliseconds(250) };
 
     private void OnPetMouseDown(object sender, MouseButtonEventArgs e)
     {
@@ -483,21 +681,226 @@ public partial class MainWindow : Window
             ToggleVisible();
             return;
         }
-        try { DragMove(); }
-        catch { }
-        ClampToWorkArea();
-        _cfg.Left = Left;
-        _cfg.Top = Top;
-        _cfg.Save();
-        RefreshMenuLabels();
+        // ⚠ 用真实光标屏幕坐标，不要用 PointToScreen(e.GetPosition(this))：
+        //   气泡展开时窗口会被自动往上顶（见「别跑出屏幕」那段），窗口一动相对坐标就跟着漂，
+        //   按一下就被判成「拖了 68 像素」→ 录音白丢。
+        _downScreen = 桌标点位();
+        _winAtDown = new System.Windows.Point(Left, Top);
+        _dragging = false;
+        PetImage.CaptureMouse();
+        e.Handled = true;
+        BeginListen();
     }
+
+    /// <summary>光标在屏幕上的位置，不受窗口自己挪动影响。</summary>
+    private static System.Windows.Point 桌标点位()
+    {
+        var p = WinForms.Cursor.Position;
+        return new System.Windows.Point(p.X, p.Y);
+    }
+
+    private void OnPetMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!PetImage.IsMouseCaptured || _dragging) return;
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+
+        var now = 桌标点位();
+        var dx = now.X - _downScreen.X;
+        var dy = now.Y - _downScreen.Y;
+        if (Math.Abs(dx) < 16 && Math.Abs(dy) < 16) return;
+
+        // 动了就是想挪位置，不是在说话：录音丢掉，别白认一遍
+        _dragging = true;
+        Log($"拖窗口（dx={dx:F0} dy={dy:F0}），这次录音丢掉");
+        CancelListen();
+        Left = _winAtDown.X + dx;
+        Top = _winAtDown.Y + dy;
+    }
+
+    private void OnPetMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (PetImage.IsMouseCaptured) PetImage.ReleaseMouseCapture();
+
+        if (_dragging)
+        {
+            _dragging = false;
+            ClampToWorkArea();
+            _cfg.Left = Left;
+            _cfg.Top = Top;
+            _cfg.Save();
+            RefreshMenuLabels();
+            return;
+        }
+
+        if (_listening) EndListen(send: true);
+        else if (_cfg.Bridge is not { Enabled: true })
+            Say("先在右键菜单里打开「连本鲸」，本鲸才听得见。");
+    }
+
+    private void OnPetLostCapture(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        // ⚠ 别在这里取消录音。鼠标一松手，WPF 会自己先释放捕获，
+        // LostMouseCapture 比 MouseLeftButtonUp 先到 —— 在这里 CancelListen 就等于
+        // "每次松手都把刚说的话吞掉"（2026-10-25 实测：日志里全是 listen start → listen cancel）。
+        // 收尾交给 OnPetMouseUp；它万一没来，_listenTick 会看左键还按着没，兜底收掉。
+    }
+
+    private void BeginListen()
+    {
+        if (_listening) return;
+        if (_cfg.Bridge is not { Enabled: true }) return;
+
+        // 一开口就把"此刻之前排着的旧回复"作废：上一轮的答别等这一轮才念
+        _bridge?.只念新的();
+        _rec ??= new Recorder();
+        try
+        {
+            _rec.Start();
+        }
+        catch (Exception ex)
+        {
+            Log("mic err: " + ex.Message);
+            Say("听不到麦克风：" + ex.Message, "error");
+            return;
+        }
+
+        _listening = true;
+        _listenStart = DateTime.Now;
+        ShowListenBadge();
+        Log("listen start");
+    }
+
+    private void EndListen(bool send)
+    {
+        if (!_listening) return;
+        _listening = false;
+        if (PetImage.IsMouseCaptured) { try { PetImage.ReleaseMouseCapture(); } catch { } }
+        HideListenBadge();
+
+        var 秒 = DateTime.Now - _listenStart;
+        byte[]? wav = null;
+        var 峰值 = 0.0;
+        try { wav = _rec?.Stop(); 峰值 = _rec?.Peak ?? 0; } catch (Exception ex) { Log("mic stop err: " + ex.Message); }
+        Log($"listen stop {秒.TotalSeconds:F1}s send={send} bytes={wav?.Length ?? 0} peak={峰值:F3}");
+
+        if (!send || wav == null)
+        {
+            if (send && 秒.TotalSeconds < 0.4) Say("太短了，按住左键再说。");
+            return;
+        }
+        // 一声没出（比如按着发呆、麦克风根本没开）：别拿去认，认出来也是瞎编
+        if (峰值 < 0.02)
+        {
+            Log("peak 太低，当没说话处理");
+            Say("本鲸没听见声音——是忘了出声，还是麦克风没开？");
+            return;
+        }
+        _ = TranscribeAndSendAsync(wav);
+    }
+
+    private void CancelListen()
+    {
+        if (!_listening) return;
+        _listening = false;
+        HideListenBadge();
+        try { _rec?.Cancel(); } catch { }
+        Log("listen cancel");
+    }
+
+    private void ShowListenBadge()
+    {
+        ListenText.Text = "正在听…";
+        ListenBadge.Visibility = Visibility.Visible;
+        var 呼吸 = new DoubleAnimation(1, 0.25, TimeSpan.FromSeconds(0.55))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        ListenDot.BeginAnimation(OpacityProperty, 呼吸);
+        _listenTick.Tick -= OnListenTick;
+        _listenTick.Tick += OnListenTick;
+        _listenTick.Start();
+    }
+
+    private void OnListenTick(object? sender, EventArgs e)
+    {
+        if (!_listening) return;
+        var 秒 = (DateTime.Now - _listenStart).TotalSeconds;
+        ListenText.Text = $"正在听 {秒:F0}s";
+
+        // 兜底：左键已经松了但 MouseLeftButtonUp 没送到（窗口失焦、捕获被抢）——
+        // 就按"说完了"处理，别把录到的话白丢。
+        if (Mouse.LeftButton == MouseButtonState.Released)
+        {
+            Log("左键已松开但没收到 MouseUp，按说完处理");
+            EndListen(send: true);
+        }
+    }
+
+    private void HideListenBadge()
+    {
+        _listenTick.Stop();
+        ListenDot.BeginAnimation(OpacityProperty, null);
+        ListenDot.Opacity = 1;
+        ListenBadge.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>认得出来的字够不够当成一句话：汉字/字母至少两个（"1育。" 这种是静音瞎编的）。</summary>
+    private static bool 有内容(string text)
+    {
+        var n = 0;
+        foreach (var c in text)
+        {
+            if (char.IsLetter(c) && c > 0x7F) n++;          // 汉字、假名
+            else if (c is >= 'a' and <= 'z' or >= 'A' and <= 'Z') n++;
+        }
+        return n >= 2;
+    }
+
+    private async Task TranscribeAndSendAsync(byte[] wav)
+    {
+        if (_bridge == null)
+        {
+            Say("本鲸没连着（右键菜单里打开「连本鲸」）。", "error");
+            return;
+        }
+
+        var 结果 = await _bridge.TranscribeAsync(wav).ConfigureAwait(true);
+        if (!string.IsNullOrWhiteSpace(结果.Text) && 有内容(结果.Text!))
+        {
+            // 认出什么只记日志，不冒气泡：念一遍自己听到的话，只会把气泡挤成一串
+            var 短 = 结果.Text!.Length > 40 ? 结果.Text[..40] + "…" : 结果.Text;
+            Log("听见「" + 短 + "」");
+            await SendToBridgeAsync(结果.Text!).ConfigureAwait(true);
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(结果.Text))
+        {
+            // 静音时 SenseVoice 会瞎编一两个字（"1育。" 这种），别拿它当需求
+            Log("听见「" + 结果.Text + "」，不像话，丢掉");
+            Say("没听清，再说一遍？");
+            return;
+        }
+        if (结果.IsPreparing)
+        {
+            Say("等本鲸把耳朵准备好——第一次要下两百多兆。");
+            return;
+        }
+        Say(结果.Error ?? "没听清。", "error");
+    }
+
+    // ---------------- 生命周期 ----------------
 
     protected override void OnClosed(EventArgs e)
     {
         _cfg.Left = Left;
         _cfg.Top = Top;
         _cfg.Save();
+        CancelListen();
+        _listenTick.Stop();
+        try { _rec?.Dispose(); } catch { }
         _feed?.Stop();
+        _bridge?.Stop();
         if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
         base.OnClosed(e);
         System.Windows.Application.Current.Shutdown();

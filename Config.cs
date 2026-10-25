@@ -17,6 +17,8 @@ public sealed class PetConfig
     public double Scale { get; set; } = 1.0;
     /// <summary>语音（本地合成，不联网不花钱）。</summary>
     public VoiceConfig Voice { get; set; } = new();
+    /// <summary>跟本鲸说话（DSH 里的 dsh-pet-bridge 插件）。</summary>
+    public BridgeConfig Bridge { get; set; } = new();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -70,6 +72,31 @@ public sealed class VoiceConfig
     public int Pitch { get; set; } = 8;
     /// <summary>音量 0~1。</summary>
     public double Volume { get; set; } = 0.9;
+
+    // ── 走哪条嗓子 ──────────────────────────────────────────
+    /// <summary>sapi = 本地 Windows 语音（机械音，离线免费）；local = 本地 GPT-SoVITS（像人，要常驻服务）；azure = 微软神经语音（要 key）。</summary>
+    public string Provider { get; set; } = "sapi";
+
+    /// <summary>本地 GPT-SoVITS 的地址（api_v2.py 默认 9880）。</summary>
+    public string? LocalUrl { get; set; } = "http://127.0.0.1:9880";
+
+    /// <summary>参考音：一小段要克隆的嗓子（5~10 秒，wav 最好）。</summary>
+    public string? LocalRefAudio { get; set; } = @"D:\DafeiyuVoice\ref\dwg_0002.wav";
+
+    /// <summary>参考音里说的那句话（一字不差，写错了音色会飘）。</summary>
+    public string? LocalPromptText { get; set; } = "什么嘛，这么简单的事情，你居然专门跑来问我。";
+
+    /// <summary>语言：zh / en / ja。</summary>
+    public string? LocalTextLang { get; set; } = "zh";
+
+    /// <summary>Azure 语音资源的密钥（门户 → 语音服务 → 密钥和终结点）。</summary>
+    public string? AzureKey { get; set; }
+
+    /// <summary>Azure 区域，比如 eastasia / japaneast / southeastasia。</summary>
+    public string? AzureRegion { get; set; } = "eastasia";
+
+    /// <summary>Azure 音色短名，比如 zh-CN-XiaoxiaoNeural（温柔）/ zh-CN-XiaoyiNeural（活泼）。</summary>
+    public string? AzureVoice { get; set; } = "zh-CN-XiaoxiaoNeural";
 }
 
 public sealed class SshFeedConfig
@@ -81,4 +108,14 @@ public sealed class SshFeedConfig
     /// <summary>服务器上的 outbox 文件（astrbot_pet_outbox 插件写的）。</summary>
     public string Remote { get; set; } = "/opt/astrbot/data/plugin_data/astrbot_plugin_pet_outbox/outbox.jsonl";
     public int IntervalSeconds { get; set; } = 5;
+}
+
+public sealed class BridgeConfig
+{
+    /// <summary>开不开「跟本鲸说话」（DSH 没开的时候会安静失败，最多 5 分钟提醒一次）。</summary>
+    public bool Enabled { get; set; } = true;
+    /// <summary>桥的地址。端口要和 ~/.dsh/pet-bridge.json 里的 port 对上。</summary>
+    public string Url { get; set; } = "http://127.0.0.1:43110";
+    /// <summary>她说完一句后，最快几秒来取一次。</summary>
+    public int IntervalSeconds { get; set; } = 2;
 }

@@ -50,7 +50,24 @@
             <Image x:Name="PetImage" Source="assets/feiyu.png" Width="230" Height="228"
                    Stretch="Uniform" Cursor="Hand"
                    RenderOptions.BitmapScalingMode="HighQuality"
-                   ToolTip="左键拖动 · 双击收进托盘 · 右键菜单 · 滚轮缩放"/>
+                   ToolTip="按住左键：跟她说话 · 拖动：挪位置 · 双击：收起 · 右键：菜单 · 滚轮：缩放"/>
+
+            <!-- 正在听：按住左键时冒出来的一小块。以后要换动态表情，先这么着。 -->
+            <Border x:Name="ListenBadge" Visibility="Collapsed" VerticalAlignment="Top"
+                    HorizontalAlignment="Center" Margin="0,4,0,0" Padding="11,5"
+                    CornerRadius="13" Background="#F20E2338" BorderBrush="#66FF6B6B"
+                    BorderThickness="1" IsHitTestVisible="False">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.4" Color="#000000"/>
+                </Border.Effect>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="ListenDot" Width="9" Height="9" Fill="#FFFF5A5A"
+                             VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ListenText" Text="正在听…" Margin="7,0,0,0"
+                               Foreground="#FFFFE9E9" FontSize="12.5"
+                               FontFamily="Microsoft YaHei UI" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>

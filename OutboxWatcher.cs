@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace DafeiyuPet;
 
@@ -20,15 +20,21 @@ public sealed class FeedItem
 }
 
 /// <summary>
-/// 轮询服务器上的 outbox.jsonl：那是 astrbot_pet_outbox 插件写的大肥鱼发言。
-/// 走 ssh 一次性取文件尾巴（不是 tail -f），每次几秒，断了下次自动重来。
+/// 从服务器上的 outbox.jsonl 读大肥鱼说了什么（astrbot_pet_outbox 插件写的）。
+///
+/// 2026-10-25 改版：原来是「每 5 秒开一次 ssh，拉一次文件尾巴」，
+/// 一天 700 多次握手，网络一抖就 20 秒超时，桌面上隔一会儿蹦一句「连不上服务器」。
+/// 现在改成**一条长连接**：ssh 里先印一遍尾巴，再用 tail -F 挂着等新行，
+/// 断了自动重连（2s→4s→…→30s 退避），只在「连续断超过 1 分钟」时提醒，30 分钟最多一次。
 /// </summary>
 public sealed class OutboxWatcher
 {
     private readonly PetConfig _cfg;
     private readonly CancellationTokenSource _cts = new();
-    private readonly JsonSerializerOptions _json = new() { PropertyNameCaseInsensitive = true };
+    private readonly System.Text.Json.JsonSerializerOptions _json =
+        new() { PropertyNameCaseInsensitive = true };
     private DateTime _lastErrorShown = DateTime.MinValue;
+
 
     public event Action<FeedItem>? Item;
     public event Action<string>? Error;
@@ -56,6 +62,16 @@ public sealed class OutboxWatcher
         catch { }
     }
 
+    private static void Log(string msg)
+    {
+        try
+        {
+            File.AppendAllText(Path.Combine(PetConfig.Dir, "pet.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} feed: {msg}\n");
+        }
+        catch { }
+    }
+
     private void SaveState()
     {
         try
@@ -69,57 +85,63 @@ public sealed class OutboxWatcher
     public void Start()
     {
         if (!_cfg.Ssh.Enabled) return;
-        _ = Task.Run(LoopAsync);
+        _ = Task.Run(StreamLoopAsync);
     }
 
     public void Stop() => _cts.Cancel();
 
-    private async Task LoopAsync()
+    /// <summary>最近一次收到数据的时间。外面靠它判断「是不是卡死了」。</summary>
+    public DateTime LastOk { get; private set; }
+
+    private async Task StreamLoopAsync()
     {
         var ct = _cts.Token;
-        var every = Math.Max(2, _cfg.Ssh.IntervalSeconds);
+        var backoff = TimeSpan.FromSeconds(2);
+        var downSince = DateTime.MinValue;
+
         while (!ct.IsCancellationRequested)
         {
+            var before = LastOk;
             try
             {
-                var text = await FetchAsync(ct).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    foreach (var line in text.Split('\n'))
-                    {
-                        var l = line.Trim();
-                        if (l.Length < 2) continue;
-                        FeedItem? it;
-                        try { it = JsonSerializer.Deserialize<FeedItem>(l, _json); } catch { continue; }
-                        if (it == null || string.IsNullOrWhiteSpace(it.Text)) continue;
-                        if (it.Ts < _lastTs - 0.001) continue;
-                        if (Math.Abs(it.Ts - _lastTs) < 0.001 && it.Id == _lastId) continue;
-                        if (it.Ts > _lastTs || it.Id != _lastId)
-                        {
-                            _lastTs = Math.Max(_lastTs, it.Ts);
-                            _lastId = it.Id;
-                        }
-                        Item?.Invoke(it);
-                    }
-                    SaveState();
-                }
+                await FollowAsync(ct).ConfigureAwait(false);
+                if (ct.IsCancellationRequested) break;
+                // 连接被服务器/网络结束了
+                if (downSince == DateTime.MinValue) downSince = DateTime.Now;
+                Log("连接结束，准备重连");
             }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
             catch (Exception ex)
             {
-                // 服务器连不上：最多 5 分钟烦一次
-                if (DateTime.Now - _lastErrorShown > TimeSpan.FromMinutes(5))
-                {
-                    _lastErrorShown = DateTime.Now;
-                    Error?.Invoke("连不上服务器：" + ex.Message);
-                }
+                if (downSince == DateTime.MinValue) downSince = DateTime.Now;
+                Log("断开 " + ex.Message);
+                ReportIfDownLongEnough(downSince, ex.Message);
             }
-            try { await Task.Delay(TimeSpan.FromSeconds(every), ct).ConfigureAwait(false); }
+
+            // 这次连上过（收到过数据）→ 退避清零
+            if (LastOk > before) { backoff = TimeSpan.FromSeconds(2); downSince = DateTime.MinValue; }
+
+            try { await Task.Delay(backoff, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { break; }
+            backoff = TimeSpan.FromSeconds(Math.Min(30, backoff.TotalSeconds * 2));
         }
     }
 
-    private async Task<string> FetchAsync(CancellationToken ct)
+    /// <summary>断了多久才值得打扰主人：连续 1 分钟以上，且 30 分钟最多一次。</summary>
+    private void ReportIfDownLongEnough(DateTime downSince, string reason)
+    {
+        var down = DateTime.Now - downSince;
+        if (down < TimeSpan.FromSeconds(60)) return;
+        if (DateTime.Now - _lastErrorShown < TimeSpan.FromMinutes(30)) return;
+        _lastErrorShown = DateTime.Now;
+        Error?.Invoke("连不上服务器（断了 " + (int)down.TotalMinutes + " 分钟）：" + reason);
+    }
+
+    /// <summary>一条长连接：先给存量，再跟着文件长。</summary>
+    private async Task FollowAsync(CancellationToken ct)
     {
         var psi = new ProcessStartInfo("ssh.exe")
         {
@@ -127,23 +149,53 @@ public sealed class OutboxWatcher
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(_cfg.Ssh.Key);
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("StrictHostKeyChecking=no");
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ConnectTimeout=8");
+        psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveInterval=15");
+        psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveCountMax=4");
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("LogLevel=ERROR");
         psi.ArgumentList.Add(_cfg.Ssh.Host);
-        psi.ArgumentList.Add("tail -c 400000 '" + _cfg.Ssh.Remote + "' 2>/dev/null");
+        var remote = _cfg.Ssh.Remote.Replace("'", "'\\''");
+        psi.ArgumentList.Add(
+            "tail -c 400000 '" + remote + "' 2>/dev/null; exec tail -F -n 0 '" + remote + "' 2>/dev/null");
 
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("ssh.exe 没起来");
         using var reg = ct.Register(() => { try { if (!p.HasExited) p.Kill(true); } catch { } });
-        var outp = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-        var err = await p.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+
+        var errTask = p.StandardError.ReadToEndAsync();
+
+        string? line;
+        while ((line = await p.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false)) != null)
+        {
+            LastOk = DateTime.Now;
+            HandleLine(line);
+        }
+
         await p.WaitForExitAsync(ct).ConfigureAwait(false);
-        if (p.ExitCode != 0 && string.IsNullOrWhiteSpace(outp))
-            throw new InvalidOperationException(string.IsNullOrWhiteSpace(err) ? "ssh 退出码 " + p.ExitCode : err.Trim());
-        return outp;
+        var err = (await errTask.ConfigureAwait(false)).Trim();
+        throw new InvalidOperationException(
+            string.IsNullOrWhiteSpace(err) ? "ssh 退出码 " + p.ExitCode : err);
+    }
+
+    private void HandleLine(string line)
+    {
+        var l = line.Trim();
+        if (l.Length < 2) return;
+        FeedItem? it;
+        try { it = JsonSerializer.Deserialize<FeedItem>(l, _json); } catch { return; }
+        if (it == null || string.IsNullOrWhiteSpace(it.Text)) return;
+        if (it.Ts < _lastTs - 0.001) return;
+        if (Math.Abs(it.Ts - _lastTs) < 0.001 && it.Id == _lastId) return;
+        if (it.Ts > _lastTs || it.Id != _lastId)
+        {
+            _lastTs = Math.Max(_lastTs, it.Ts);
+            _lastId = it.Id;
+        }
+        SaveState();
+        Item?.Invoke(it);
     }
 }

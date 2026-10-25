@@ -2,19 +2,25 @@
 
 桌面右下角一只大肥鱼，跟 DSH 面板、AstrBot 面板都没关系，双击就能跑。
 
+> 要加功能先看 [`设计文档.md`](设计文档.md)——菜单、分期、边界都在那儿。
+
 - 会**提醒你**：到点冒气泡 + 托盘气泡通知。
 - 会**转述她在 QQ 里说的话**：服务器上的 `astrbot_pet_outbox` 插件把她的发言写进 `outbox.jsonl`，桌宠每 5 秒 ssh 拉一次。
 - 在 QQ 里跟她说「**提醒我 9:30 喝水**」「**每天 21 点提醒我吃药**」，提醒会顺着同一条链路下发到桌面。
+- 会**跟 DSH 里的本鲸说话**：**按住左键**就录，松手就发——桌宠只负责录音，认字交给 DSH 自带的 SenseVoice（`dsh-pet-bridge` 插件的 `POST /stt`），认出来的字再递进去，她照常开一轮干活，回答顺着 `http://127.0.0.1:43110` 回来念给你听。DSH 没开的时候最多 15 分钟提示一次「本鲸还没上线」。
 
 ## 用法
 
 | 操作 | 效果 |
 | --- | --- |
-| 左键拖 | 挪位置（位置会记住） |
+| **按住左键** | 跟她说话（鱼头上冒「正在听 Ns」），松手结束 → 认字 → 递给 DSH |
+| 左键拖（按住别松手就挪） | 挪位置（移动超过 12 像素就取消录音、改成拖窗口；位置会记住） |
 | 双击 | 收进托盘 / 叫回来 |
 | 滚轮 | 放大缩小（0.6~1.9） |
-| 右键 | 加提醒 / 说两句 / 打开提醒文件 / 收进托盘 / 退出 |
-| 托盘图标 | 双击显示隐藏；右键有「加提醒…」「静音 1 小时」「连服务器」开关 |
+| 右键 | 加提醒 / 跟本鲸说话 / 说两句 / 打开提醒文件 / 收进托盘 / 退出 |
+| 托盘图标 | 双击显示隐藏；右键有「加提醒…」「跟本鲸说话…」「静音 1 小时」「连服务器」「连本鲸」开关 |
+
+第一次按住说话时，DSH 那边要先下 SenseVoice 模型（约 230MB，走国内镜像），桌宠会冒一句「等本鲸把耳朵准备好」；下完再用就正常了。
 
 单实例：已经在跑的时候再双击，只会弹一句「大肥鱼已经在桌上了」。
 
@@ -80,10 +86,12 @@
 
 ```bat
 cd /d D:\DafeiyuPet
-dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
+dotnet publish -c Release -o publish
 ```
 
-产物：`publish\DafeiyuPet.exe`（约 500 KB，图已经嵌进去，挪到哪都能跑）。
+产物：`publish\` 整个目录（`DafeiyuPet.exe` + `DafeiyuPet.dll` + `NAudio*.dll` 等）。
+**别只拷 exe**：录音用 NAudio（NuGet），`NAudio.dll` / `NAudio.WinMM.dll` 等几个 dll 必须一起拷过去，否则一按住左键就报找不到程序集。
+
 需要 .NET 9 桌面运行时（本机已装 `Microsoft.WindowsDesktop.App 9.0.15`）。
 
 ## 安装 / 开机自启
@@ -92,6 +100,15 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 再在「启动」文件夹里建快捷方式（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\大肥鱼桌宠.lnk`）。
 
 手工装也一样：**复制到 `%LOCALAPPDATA%\Programs\DafeiyuPet\` 再建快捷方式**，别原地跑。
+
+## 本地语音服务（GPT-SoVITS）开机自启
+
+嗓子里选「克隆嗓」（`Voice.Provider = local`）时，桌宠要靠本机 `http://127.0.0.1:9880` 的 `api_v2.py`。
+
+- 脚本：`D:\DafeiyuVoice\start-tts.vbs`（隐藏窗口起 `runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880`；发现 9880 已在跑就直接退出，不会起第二个）
+- 开机自启：同一份文件拷到启动文件夹 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\大肥鱼语音服务.vbs`
+- 手动起：双击那个 vbs。它起完要等 **15~25 秒**加载模型，这期间桌宠说话会退回 SAPI
+- 桌宠这边不用管：`GptSovits.PingAsync` 打不到就自动降级，服务起来后下次说话自动用回克隆嗓
 
 ## 服务器那头
 
@@ -106,3 +123,6 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 - 只从 outbox 读「她说的」，不读群里别人说的（要的话在插件里加过滤就行）。
 - 提醒按分钟精度，同一条同一分钟只响一次；`once` 响完自动变 `Enabled:false`，不删。
 - 气泡是窗口的一部分：气泡出现时窗口会变高，程序会反向挪窗口让鱼原地不动。
+- **录音只认 16 kHz / 单声道 / PCM16**：DSH 的转写服务逐字段校验 WAV 头，别的采样率直接判「坏音频」。所以 `Recorder.cs` 里参数是写死的，别改。
+- 按住说话时**动一下就变成拖窗口**（阈值 12 像素），这是故意的：同一个左键要兼顾「说话」和「挪位置」。判拖动用的是**系统光标坐标**，不是窗口内相对坐标——气泡展开时窗口会自己上顶，用相对坐标按一下就会被误判成“拖了 68 像素”，话就白说了。
+- 麦克风打不开（系统里没有输入设备 / 隐私设置禁了）会直接冒气泡告诉你是哪个错，不会静默失败。
