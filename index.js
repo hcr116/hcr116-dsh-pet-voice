@@ -235,11 +235,13 @@ function 记我们发的(t) {
   if (我们发的.length > 30) 我们发的.shift()
 }
 
+/** 记住桌宠真实的显示模式（web / desktop / both）。它自己会告诉我们，抄一次就不会再错。 */
+let 记着的surface = ''
+
 async function 说给桌宠(ctx, cfg, 文本) {
   const 基 = 宠物基址(ctx, cfg)
   if (!基) return { ok: false, reason: 'no-port', message: '拿不到 DSH 的 web 端口（dsh-pet 没跑？）' }
   const 宠物 = encodeURIComponent(cfg.petId || 'main')
-  const 面 = encodeURIComponent(cfg.surface || 'web')
   const 送 = async (地址, 体) => {
     const 回 = await fetch(地址, {
       method: 'POST',
@@ -250,32 +252,46 @@ async function 说给桌宠(ctx, cfg, 文本) {
     return 回.json()
   }
 
-  let 锁
-  try {
-    锁 = await 送(`${基}/lock?pet=${宠物}&surface=${面}`, { ttl: 120000 })
-  } catch (错误) {
-    return { ok: false, reason: 'unreachable', message: String((错误 && 错误.message) || 错误) }
-  }
-  if (!锁 || !锁.ok) return 锁 || { ok: false, reason: 'lock-failed' }
-
-  const 锁号 = 锁.lockId
-  try {
-    const 结果 = await 送(`${基}/broadcast?pet=${宠物}&surface=${面}&lock=${encodeURIComponent(锁号)}`, {
-      text: 文本,
-      duration: cfg.bubbleMs,
-      anim: true,
-    })
-    if (结果 && 结果.ok) 记我们发的(文本)
-    return 结果
-  } catch (错误) {
-    return { ok: false, reason: 'broadcast-error', message: String((错误 && 错误.message) || 错误) }
-  } finally {
+  const 发一遍 = async (面) => {
+    const 面码 = encodeURIComponent(面)
+    let 锁
     try {
-      await 送(`${基}/lock/release?pet=${宠物}`, { lockId: 锁号 })
-    } catch {
-      /* 释放失败就等它自己过期（默认 2 分钟） */
+      锁 = await 送(`${基}/lock?pet=${宠物}&surface=${面码}`, { ttl: 120000 })
+    } catch (错误) {
+      return { ok: false, reason: 'unreachable', message: String((错误 && 错误.message) || 错误) }
+    }
+    if (!锁 || !锁.ok) return 锁 || { ok: false, reason: 'lock-failed' }
+
+    const 锁号 = 锁.lockId
+    try {
+      const 结果 = await 送(`${基}/broadcast?pet=${宠物}&surface=${面码}&lock=${encodeURIComponent(锁号)}`, {
+        text: 文本,
+        duration: cfg.bubbleMs,
+        anim: true,
+      })
+      if (结果 && 结果.ok) 记我们发的(文本)
+      return 结果
+    } catch (错误) {
+      return { ok: false, reason: 'broadcast-error', message: String((错误 && 错误.message) || 错误) }
+    } finally {
+      try {
+        await 送(`${基}/lock/release?pet=${宠物}`, { lockId: 锁号 })
+      } catch {
+        /* 释放失败就等它自己过期（默认 2 分钟） */
+      }
     }
   }
+
+  let 面 = 记着的surface || cfg.surface || 'web'
+  let 结果 = await 发一遍(面)
+  // 桌宠在哪块屏幕上显示是它说了算（设置页一改就变），它会把真实模式回给我们，照着再发一遍。
+  if (结果 && 结果.reason === 'pet-not-displayed' && 结果.display && 结果.display !== 面) {
+    面 = 结果.display
+    记着的surface = 面
+    记日志(`桌宠的显示模式是 ${面}，按这个重发`)
+    结果 = await 发一遍(面)
+  }
+  return 结果
 }
 
 // ---------- 嗓子 ----------
@@ -512,6 +528,7 @@ export const __test = {
   重置注入: () => {
     注入过的语音服务 = null
     注入过的端口 = null
+    记着的surface = ''
   },
 }
 

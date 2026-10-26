@@ -60,6 +60,28 @@ test('说给桌宠：宠物没起时返回 unreachable，不抛', async () => {
   assert.equal(回.reason, 'unreachable')
 })
 
+test('说给桌宠：显示模式对不上时照它回的 display 重发一次', async () => {
+  const 见 = []
+  const { s, 端口 } = await 起服务((req, res, 体) => {
+    见.push(req.url)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    if (req.url.startsWith('/dsh-pet-7340/lock/release')) return res.end(JSON.stringify({ ok: true }))
+    if (req.url.includes('surface=web')) {
+      return res.end(JSON.stringify({ ok: false, reason: 'pet-not-displayed', message: 'main 的显示模式是 desktop', display: 'desktop' }))
+    }
+    if (req.url.startsWith('/dsh-pet-7340/lock')) return res.end(JSON.stringify({ ok: true, lockId: 'L-2' }))
+    res.end(JSON.stringify({ ok: true, shown: true }))
+  })
+  try {
+    const cfg = { petId: 'main', surface: 'web', bubbleMs: 9000, petPort: 端口 }
+    const 回 = await 说给桌宠({}, cfg, '换模式重发')
+    assert.equal(回.ok, true)
+    assert.ok(见.some((u) => u.includes('surface=desktop') && u.startsWith('/dsh-pet-7340/broadcast')), '要改用 desktop 再发一遍')
+  } finally {
+    s.close()
+  }
+})
+
 test('合成：payload 字段和老桌宠 GptSovits.cs 一模一样', async () => {
   let 收体 = null
   const { s, 端口 } = await 起服务((req, res, 体) => {
