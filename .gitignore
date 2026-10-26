@@ -1,10 +1,13 @@
-# 编译产物
+# 编译产物与本地产物不入库
+node_modules/
+*.log
+.DS_Store
+
+# 自测与临时目录
+.selftest/
+.archify/
+
+# 旧 C# 桌宠留下的编译产物（源码已随 v1-csharp-pet 归档，这些只是本机残留）
 bin/
 obj/
 publish/
-
-# 用户本地的
-*.user
-*.suo
-.vs/
-.selftest/

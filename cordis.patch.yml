@@ -1,0 +1,7 @@
+# DSH「桌宠嗓子」——把 DSH 的回答念给 dsh-pet 听（气泡 + 说话动画 + GPT-SoVITS 克隆嗓）
+#
+# ⚠ 本插件不注册任何 systemPrompt / persona 段：人格由 dsh-agent-md 注入一次就够了，
+#   再注册一遍会让同一段 prompt 在系统提示里出现两次（公司那台就是这么崩的）。
+- insert:
+    - id: pet-voice
+      name: 'dsh-pet-voice'
