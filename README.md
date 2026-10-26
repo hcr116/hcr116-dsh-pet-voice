@@ -1,123 +1,66 @@
-# 大肥鱼 · 语音入口（dsh-pet-voice）
+# dsh-pet-voice · 给 dsh-pet 装一张嘴
 
-给 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 这只网页桌宠补上两件事：
+把 DSH 的回答念给网页里那只大肥鱼听：**气泡 + 说话动画 + 本鲸的克隆嗓**。
 
-1. **听你说**：在 DSH 窗口里按住 `Ctrl+U` 说话，松手后本地转写，文字落进当前会话的输入框，你自己按回车发出去。
-2. **开口回你**：每一轮回答结束后，从回答里挑一句，克隆嗓（本机 GPT-SoVITS）念出来，同时桌宠冒气泡、做说话动画。
-
-> 上一版是 C# WPF 的桌面宠物（能在桌面漂、能按 U 说话、能读 QQ 消息）。那一套的源码已从本仓库删除，需要翻旧账就 `git show v1-csharp-pet`。
-
-## 它怎么挂上去的
+dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只管「说话」这一件事。
 
 ```
-你按住 Ctrl+U
-   → 网页半边 lib/client.js：录音 16 kHz 单声道 PCM16 WAV
-   → POST /dsh-pet-voice/stt
-   → 宿主半边 index.js：ctx.speechToText（SenseVoice，本机）
-   → 文字插到输入框光标处（不覆盖你已打的字）
-   → 你按回车，DSH 走普通一轮（人格、历史、工具、记忆都在）
-   → 回答结束 → 挑一句 → 气泡 + GPT-SoVITS 念
+一轮回答结束（agent/turn-stopping）
+  └─ 取这一轮最后一条助手消息
+       └─ 挑一句短的（有 `口播：` 就念那行，没有就规则兜底，最多 40 字）
+            ├─ → dsh-pet：lock → broadcast → release   气泡 + 说话动画（约 50ms）
+            └─ → 本机 GPT-SoVITS 127.0.0.1:9880/tts     克隆嗓合成 wav（约 1~3s）
+                 └─ PowerShell System.Media.SoundPlayer 念出来
 ```
 
-设计文档（策划视角，含流程图、挑句规则、出错对照、验收清单）：
-[`docs/语音入口-设计-v1.html`](docs/语音入口-设计-v1.html) · 源文件 [`docs/设计稿源.archify.md`](docs/设计稿源.archify.md)
-
-## 装
+## 装（本机已装好，这段是重装时用的）
 
 ```bash
-# 1) 装身体（网页版，不下载 Electron）
-dsh plugin --profile desktop add dsh-pet
-
-# 2) 装这个插件（用绝对路径 link，别用相对路径，dsh 会把相对路径解析到盘符根）
-dsh plugin --profile desktop add C:/Users/Administrator/.dsh/plugins/dsh-pet-voice
-
-# 3) 确认它进了 profile 的 bundles（dsh 不会自动把已存在的依赖补进 bundles，要手工加）
-#    ~/.dsh/profiles/desktop/package.json → dsh.profile.bundles 末尾加 "dsh-pet-voice"
-
-# 4) 重启 DSH
+dsh plugin --profile desktop add "C:/Users/Administrator/.dsh/plugins/dsh-pet-voice"
 ```
 
-`package.json` 里必须同时有三样东西，缺一个网页半边就不会被加载：
-
-```json
-"exports": { ".": "./index.js", "./client": "./lib/client.js" },
-"dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["slots"], "external": ["react"] } }
-```
+装完**重开 DSH**。它没有客户端半边（dsh.client），所以不参与浏览器启动检查——就算它自己坏了也砸不到界面。
 
 ## 配
 
-配置在 `~/.dsh/dsh-pet-voice.json`，**每次说话现读**，改完不用重启：
+配置文件 `~/.dsh/dsh-pet-voice.json`，**每次说话现读**，改完不用重启：
 
-```jsonc
-{
-  "enabled": true,
-  "petId": "main",          // dsh-pet 里的宠物 id
-  "surface": "web",         // 必须是网页版；要让桌面窗也显示就改成 both
-  "bubbleMs": 9000,         // 气泡挂多久
-  "voice": "local",         // local = 克隆嗓，失败自动退 sapi；sapi = 只用系统嗓子；off = 只冒泡不出声
-  "sapi": { "voice": "", "rate": 0, "volume": 90 }, // voice 留空自动挑中文女声
-  "maxChars": 40,           // 一句念多长
-  "mainSessionOnly": true,  // 只念你正看着的那个会话（子代理会话不念）
-  "sovits": {
-    "url": "http://127.0.0.1:9880",
-    "refAudio": "D:\\DafeiyuVoice\\ref\\dwg_0002.wav",
-    "promptText": "什么嘛，这么简单的事情，你居然专门跑来问我。",
-    "lang": "zh",
-    "speed": 1,
-    "timeoutMs": 3000       // 超过就退 SAPI，别让人等
-  }
-}
-```
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 关掉只留 dsh-pet 自己的碎碎念 |
+| `petId` | `main` | 说话的那只宠物（dsh-pet 的 `pets[].id`） |
+| `surface` | `web` | 必须和那只宠物的 `display` 对上，否则 dsh-pet 回 `pet-not-displayed` |
+| `bubbleMs` | `9000` | 气泡停留毫秒 |
+| `voice` | `local` | `local` = GPT-SoVITS 克隆嗓；`off` = 只出气泡不出声 |
+| `maxChars` | `40` | 一句话最多几个字 |
+| `sovits.url` | `127.0.0.1:9880` | GPT-SoVITS 服务 |
+| `sovits.refAudio` | `D:\DafeiyuVoice\ref\dwg_0002.wav` | 参考音（别人的声音，别外传） |
+| `sovits.promptText` | 参考音对应的那句话 | 必须和参考音一致，否则音色跑偏 |
+| `sovits.speed` | `1` | 语速，0.5~2 |
 
-`voice: "local"` 需要先起 GPT-SoVITS（本机 `D:\DafeiyuVoice\start-tts.vbs`）。没起也不会哑：3 秒判失败，自动换成系统嗓子。
-
-## 挑句规则（不随机）
-
-1. 回答里如果有 `口播：` / `口播词：` / `播报：` 开头的一行，就念那一行（人格 v1.17 起会主动写）。
-2. 没有就取第一句能念的。
-3. 都不行就只冒泡不出声。
-
-念之前先清：代码块整段丢掉、`|` 开头的表格行、`#` 标题、`>` 引用、路径与命令、纯英文串、markdown 符号、emoji。**鱼鱼不念代码。**
-
-## 调试路由
-
-全在 `http://127.0.0.1:7745`（端口取 DSH 自己的 webserver）：
-
-| 路由 | 作用 |
-| --- | --- |
-| `GET /dsh-pet-voice/state` | 现在什么状态：语音服务就绪没、前台是哪个会话、队列、上次说了什么 |
-| `POST /dsh-pet-voice/say` `{"text":"…"}` | 让鱼鱼念一句（不进对话） |
-| `POST /dsh-pet-voice/focus` `{"sessionId":"…"}` | 网页半边挂载时自己报的，不用手动调 |
-| `POST /dsh-pet-voice/stt` `{"audioBase64":"…"}` | 转写（web 半边用）；服务没准备好回 425 |
-
-## 测
+## 调（自己听一句）
 
 ```bash
-node --test tests/host.test.mjs tests/client.smoke.mjs tests/integration.test.mjs
+curl -X POST http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/say -H "content-type: application/json" -d "{\"text\":\"试音，本鲸的嗓子还活着。\"}"
+curl http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/state
 ```
 
-14 个用例，不需要网络也不需要 DSH 在跑：
+端口就是 DSH 网页的端口（`dsh web` 打出来的那个，本机 7745）。这两个路由只绑 127.0.0.1、不鉴权，和 dsh-pet 自己的接口同一个口径。
 
-- `tests/host.test.mjs` — 挑句规则、去表情、路由（前台会话、503、短音频、空文本）
-- `tests/client.smoke.mjs` — 网页半边用假 `ModuleLoader` 跑一遍，验注册形状与 WAV 头（PCM=1 / 单声道 / 16000 / 16 bit / data 长度）
-- `tests/integration.test.mjs` — 起假的 dsh-pet 与假的 GPT-SoVITS，验 `lock → broadcast → release` 三次请求、`?surface=` 与 `lock=` 参数、payload 字段，以及超时降级
+## 不念什么
 
-想单独验系统嗓子：`PETVOICE_SILENT_WAV=C:/tmp/a.wav node -e "import('./index.js').then(m=>m.__test.念SAPI('测试',{}))"`（写文件，不外放）。
+- 只念**一轮最后的**那条助手消息（中途的工具调用、思考过程不念）。
+- 代码块、表格、标题、引用、链接、超长段落都不念，挑第一句像人话的。
+- 想指定念哪句，在回答里写一行 `口播：xxx`。
 
-## 踩过的坑（v2 才修好）
+## 三条别踩的坑（写在这里免得下次又踩）
 
-这两处任何一个都会让「按 Ctrl+U 什么都不发生」，而且**都不报错、不影响启动**，只会在浏览器控制台里留一行：
+1. **不注册任何 systemPrompt / persona 段**。人格由 `dsh-agent-md` 注入一次就够；再注册一遍 = 同一段 prompt 进两次，DSH 直接起不来（隔壁公司那台就这么崩的）。
+2. **不写静态 `inject` 里没有的服务**。客户端半边要有也只用动态 `ctx.inject([...], cb)`；宿主侧只 inject 核心 `agents` / `sessions`，`webServer` 惰性 `ctx.get()` 拿。
+3. **`peerDependencies` 里不写 `@deepseek-ai/dsh-*`**，DSH ≥0.2.0 会对不上的 peer 静默丢包。写文件一律不带 BOM（`Unexpected token '\ufeff'`）。
 
-- **宿主半边**：`apply(ctx)` 那一刻 `ctx.get('webServer')` / `ctx.get('speechToText')` 都还是 `undefined`。必须写成
-  `ctx.inject(['webServer'], 范围 => 范围.effect(() => 范围.webServer.register(...)))`，
-  转写同理（`ctx.inject(['speechToText'], 范围 => …)`）。v1 用 `ctx.get` 拿端口和路由，结果路由一条都没注册、`/dsh-pet-voice/*` 全 404。
-- **网页半边**：不能自己用 `ctx.inject(['slots'], …)` 去取插槽——那样拿到的作用域读 `slots` 会抛
-  `cannot get property "slots" without inject`。正确写法是静态 `inject = ['slots']` + `ctx.slots.inject('conversation.input.overlay', function* () { yield ctx.slots.register(...) })`，和 dsh-pet、官方语音输入一致。
+## 和别的插件的关系
 
-## 已知限制
-
-- **网页半边改动必须重启 DSH 才生效**。`dsh --profile desktop` 被 Electron 独占，CLI 不能二次启动；`--dump-config` 也一样被拒。
-- `Ctrl+U` 是浏览器「查看源代码」的快捷键，页面里要 `preventDefault` 抢；抢不到会自动改认 `Ctrl+Shift+U`。热键只在 DSH 窗口聚焦时有效（网页拿不到全局键盘）。
-- 录音按 16 kHz / 单声道 / PCM16 固定，这是 DSH 转写服务的硬要求，改不了。
-- 克隆嗓有 1~3 秒合成延迟，气泡先到、声音后到。
-- 说话时会掐掉上一句（只念最新），所以连发两条只听到第二条。
+- `dsh-pet-bridge`（本地 link）本来是给**桌面那只 C# 大肥鱼**喂话的，它现在不在 `bundles` 里，没在跑。两边不冲突，但别同时开两个声音。
+- `dsh-speak-up` 是「主动起话头」，它起的话也会被这里念出来（它本身就是一轮回答）。
+- `dsh-pet` 自己的 `whisperEnabled` 建议关掉（`~/.dsh/dsh-pet/main-config.jsonc` 里已经是 `false`）：那个碎碎念每轮都调模型，烧 token 还顶 KV cache。

@@ -421,10 +421,24 @@ function 语音状态(ctx) {
   return null
 }
 
+/**
+ * DSH 的 speechToText.snapshot() 不是扁平对象，真实形状是：
+ *   { providers: [{ id, name, languages, preparation: { phase, steps, ... } }],
+ *     selection: { providerId, language } }
+ * 早先按 状态.phase / 状态.providerId 读，永远读不到 → 永远回 425「识别模型还在准备」。
+ */
+function 取准备(状态) {
+  if (!状态 || typeof 状态 !== 'object') return { providerId: '', 准备: null }
+  const 选 = (状态.selection && 状态.selection.providerId) || ''
+  const 列 = Array.isArray(状态.providers) ? 状态.providers : []
+  const 中 = 列.find((p) => p && p.id === 选) || 列[0] || null
+  return { providerId: 选 || (中 && 中.id) || '', 准备: (中 && 中.preparation) || null }
+}
+
 function 已就绪(状态) {
-  if (!状态) return false
-  const 相 = String(状态.phase || '')
-  return 相 === 'ready' || 相 === 'loaded' || 状态.ready === true
+  const 准 = 取准备(状态).准备
+  if (!准) return false
+  return 准.phase === 'ready'
 }
 
 async function 读体(req, 上限 = 8 * 1024 * 1024) {
@@ -439,7 +453,20 @@ async function 读体(req, 上限 = 8 * 1024 * 1024) {
 }
 
 // ---------- 给测试用的出口（不参与运行时逻辑） ----------
-export const __test = { 清干净, 切一句, 合成, 说给桌宠, 宠物基址, 念SAPI }
+export const __test = {
+  清干净,
+  切一句,
+  合成,
+  说给桌宠,
+  宠物基址,
+  念SAPI,
+  取准备,
+  已就绪,
+  重置注入: () => {
+    注入过的语音服务 = null
+    注入过的端口 = null
+  },
+}
 
 // ---------- 主逻辑 ----------
 export function apply(ctx) {
@@ -605,13 +632,16 @@ export function apply(ctx) {
               if (路 === '/stt/status') {
                 const 状态 = 语音状态(ctx)
                 if (!语音服务(ctx)) return 回(503, { ok: false, code: 'no-service', error: 'DSH 的语音服务没开着' })
+                const { providerId, 准备 } = 取准备(状态)
                 return 回(200, {
                   ok: true,
-                  phase: 状态 && 状态.phase,
-                  step: 状态 && 状态.step,
-                  progress: 状态 && 状态.progress,
+                  phase: 准备 && 准备.phase,
+                  step: 准备 && 准备.step,
+                  steps: (准备 && 准备.steps) || [],
+                  progress: 准备 && 准备.totalBytes ? Math.round((准备.completedBytes / 准备.totalBytes) * 100) : undefined,
                   就绪: 已就绪(状态),
-                  provider: (状态 && 状态.providerId) || null,
+                  provider: providerId || null,
+                  providers: ((状态 && 状态.providers) || []).map((p) => ({ id: p.id, name: p.name })),
                 })
               }
 
@@ -629,10 +659,11 @@ export function apply(ctx) {
 
                 const 状态 = 语音状态(ctx)
                 if (!已就绪(状态)) {
-                  const 相 = 状态 && 状态.phase
-                  if (相 !== 'preparing' && 相 !== 'downloading' && 相 !== 'loading') {
+                  const { providerId, 准备 } = 取准备(状态)
+                  const 相 = 准备 && 准备.phase
+                  if (相 !== 'downloading' && 相 !== 'checking' && 相 !== 'loading') {
                     try {
-                      stt.prepare((状态 && 状态.providerId) || cfg.stt.providerId || 'sensevoice-local', {
+                      stt.prepare(providerId || cfg.stt.providerId || 'sensevoice-local', {
                         downloadSource: cfg.stt.downloadSource,
                       })
                     } catch {
