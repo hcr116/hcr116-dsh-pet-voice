@@ -55,7 +55,7 @@ dsh plugin --profile desktop add C:/Users/Administrator/.dsh/plugins/dsh-pet-voi
   "surface": "web",         // 必须是网页版；要让桌面窗也显示就改成 both
   "bubbleMs": 9000,         // 气泡挂多久
   "voice": "local",         // local = 克隆嗓，失败自动退 sapi；sapi = 只用系统嗓子；off = 只冒泡不出声
-  "sapiVoice": "",          // 留空自动挑中文女声
+  "sapi": { "voice": "", "rate": 0, "volume": 90 }, // voice 留空自动挑中文女声
   "maxChars": 40,           // 一句念多长
   "mainSessionOnly": true,  // 只念你正看着的那个会话（子代理会话不念）
   "sovits": {
