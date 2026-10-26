@@ -90,7 +90,7 @@ copy publish\DafeiyuPet.exe "$env:LOCALAPPDATA\Programs\DafeiyuPet\"
   "Ssh": {                       // QQ 转述：去服务器读 outbox
     "Enabled": true,
     "Host": "root@114.55.151.88",
-    "Key": "D:\\ds\\dafeiyu\\_hcr116.pem",   // ⚠ 换机器要改；私钥别入库
+    "Key": "D:\\ds\\dafeiyu\\_hcr116.pem",   // 家里这台机器上的私钥；私钥一律不入库
     "Remote": "/opt/astrbot/data/plugin_data/astrbot_plugin_pet_outbox/outbox.jsonl",
     "IntervalSeconds": 5        // 现在只是退避基数，长连接不再每 5 秒拉一次
   },
@@ -187,4 +187,9 @@ ssh root@114.55.151.88 "docker exec astrbot python -m py_compile /AstrBot/data/p
 
 ## 10. 一句话交接
 
-`dotnet publish` 出单文件 → 拷到 `%LOCALAPPDATA%\Programs\DafeiyuPet` → 跑 `装开机自启.bat` → 改 `config.json` 里的 `Ssh.Key` 和 `Bridge.Url`。要对话就得把 `bridge-plugin/` 装进 DSH，要转述就得把 `server-plugin/` 装进服务器 AstrBot。
+`dotnet publish` 出单文件 → 拷到 `%LOCALAPPDATA%\Programs\DafeiyuPet` → 跑 `装开机自启.bat`。
+要对话就把 `bridge-plugin/` 装进 DSH；要 QQ 转述就要 `server-plugin/` 在服务器上跑。
+
+> 🔑 **密钥规矩（主人的硬要求）**：这个仓库里**不放任何私钥**，公司/别的电脑**不许拷贝家里那把 `_hcr116.pem`**。
+> 没有私钥的机器上，`Ssh` 这一段会连不上 —— 那是**预期行为**：那台机器只做开发和构建，气泡、提醒、语音、桥都照常，只有 QQ 转述不工作。
+> 真要在别的机器启用转述，让它生成**它自己的**密钥、由管理员加到服务器 `authorized_keys`，用完撤掉；不要复制家里的。
