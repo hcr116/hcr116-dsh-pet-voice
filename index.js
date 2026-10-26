@@ -195,10 +195,17 @@ export function 挑要说的话(全文, 上限 = 口播上限) {
 function 宠物基址(ctx, cfg) {
   let 端口 = 0
   try {
-    let ws = null
-    if (typeof ctx.get === 'function') ws = ctx.get('webServer')
-    if (!ws) ws = ctx.webServer
-    if (ws && typeof ws.port === 'number' && ws.port > 0) 端口 = ws.port
+    // 优先用注入进来的 webServer（没 inject 的 ctx 读不到服务）
+    if (注入过的端口) {
+      const p = 注入过的端口()
+      if (typeof p === 'number' && p > 0) 端口 = p
+    }
+    if (!端口) {
+      let ws = null
+      if (typeof ctx.get === 'function') ws = ctx.get('webServer')
+      if (!ws) ws = ctx.webServer
+      if (ws && typeof ws.port === 'number' && ws.port > 0) 端口 = ws.port
+    }
   } catch {
     /* 拿不到就走配置兜底 */
   }
@@ -382,8 +389,17 @@ function 落盘(字节) {
 }
 
 // ---------- 转写（懒取 speechToText，拿不到就 503） ----------
+// 注意：没有 inject 过的 ctx 读不到服务（cordis 会报 "cannot get property ... without inject"
+// 或直接返回 undefined），所以真正的服务句柄要在 apply 里 ctx.inject(['speechToText'], …) 拿到。
+let 注入过的语音服务 = null
+let 注入过的端口 = null
+
 function 语音服务(ctx) {
   try {
+    if (注入过的语音服务) {
+      const s = 注入过的语音服务()
+      if (s) return s
+    }
     if (typeof ctx.get === 'function') {
       const s = ctx.get('speechToText')
       if (s) return s
@@ -517,10 +533,12 @@ export function apply(ctx) {
   })
 
   // 网页半边与外部测试口（只挂 127.0.0.1，和 dsh-pet 一个口径：无鉴权）
-  try {
-    const ws = typeof ctx.get === 'function' ? ctx.get('webServer') : ctx.webServer
-    if (ws && typeof ws.register === 'function') {
-      ctx.effect(
+  // webServer 在 apply 这一刻还没就绪，必须等它注入进来（V1 就是栽在这里：ctx.get 拿不到，静默 404）
+  const 挂路由 = (范围) => {
+    const ws = 范围.webServer
+    if (!ws || typeof ws.register !== 'function') return
+    注入过的端口 = () => ws.port
+    范围.effect(
         () =>
           ws.register({
             kind: 'prefix',
@@ -656,10 +674,20 @@ export function apply(ctx) {
               return 回(404, { ok: false, error: '没有这个路口：' + 路 })
             },
           }),
-        'dsh-pet-voice: 路由',
-      )
-    }
+      'dsh-pet-voice: 路由',
+    )
+  }
+  try {
+    if (typeof ctx.inject === 'function') ctx.inject(['webServer'], 挂路由)
+    else 挂路由(ctx)
   } catch {
     /* 没有 webServer 就只做被动念，不影响启动 */
+  }
+
+  // 语音服务同理：apply 这一刻读不到，必须等注入（读到之前 /stt 会老实回 503）
+  try {
+    if (typeof ctx.inject === 'function') ctx.inject(['speechToText'], (范围) => { 注入过的语音服务 = () => 范围.speechToText })
+  } catch {
+    /* 没有语音服务就只做被动念 */
   }
 }

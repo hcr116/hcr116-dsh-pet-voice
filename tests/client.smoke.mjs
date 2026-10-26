@@ -45,12 +45,15 @@ function 跑一遍() {
     throw new Error('不该 require ' + 名)
   })
   assert.equal(typeof 模块.apply, 'function')
-  assert.deepEqual(模块.inject, [], '静态 inject 必须是空的，否则宿主缺服务就起不来')
+  // 静态 inject 只写网页壳的核心服务 slots（dsh-pet、官方语音输入都这么写）；多写一个不存在的名才会让 fiber 卡住
+  assert.deepEqual(模块.inject, ['slots'])
 
   const ctx = {
     slots: {
-      inject: (名, 回调) => {
-        回调()
+      inject: (名, 生成器) => {
+        // 与 cordis 一致：slots.inject(name, function*(){ yield ctx.slots.register(...) })
+        const 迭代 = 生成器()
+        迭代.next()
         return { dispose: () => {} }
       },
       register: (选项, 组件) => {
@@ -68,7 +71,7 @@ function 跑一遍() {
   return { 登记, window }
 }
 
-test('factory 能跑，注册形状正确，静态 inject 为空', () => {
+test('factory 能跑，注册形状正确，静态 inject 只有 slots', () => {
   const { 登记 } = 跑一遍()
   assert.equal(typeof 登记.组件, 'function')
   // 空闲时什么都不渲染（不占输入框地方）

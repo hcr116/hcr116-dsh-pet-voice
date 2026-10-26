@@ -104,6 +104,16 @@ node --test tests/host.test.mjs tests/client.smoke.mjs tests/integration.test.mj
 
 想单独验系统嗓子：`PETVOICE_SILENT_WAV=C:/tmp/a.wav node -e "import('./index.js').then(m=>m.__test.念SAPI('测试',{}))"`（写文件，不外放）。
 
+## 踩过的坑（v2 才修好）
+
+这两处任何一个都会让「按 Ctrl+U 什么都不发生」，而且**都不报错、不影响启动**，只会在浏览器控制台里留一行：
+
+- **宿主半边**：`apply(ctx)` 那一刻 `ctx.get('webServer')` / `ctx.get('speechToText')` 都还是 `undefined`。必须写成
+  `ctx.inject(['webServer'], 范围 => 范围.effect(() => 范围.webServer.register(...)))`，
+  转写同理（`ctx.inject(['speechToText'], 范围 => …)`）。v1 用 `ctx.get` 拿端口和路由，结果路由一条都没注册、`/dsh-pet-voice/*` 全 404。
+- **网页半边**：不能自己用 `ctx.inject(['slots'], …)` 去取插槽——那样拿到的作用域读 `slots` 会抛
+  `cannot get property "slots" without inject`。正确写法是静态 `inject = ['slots']` + `ctx.slots.inject('conversation.input.overlay', function* () { yield ctx.slots.register(...) })`，和 dsh-pet、官方语音输入一致。
+
 ## 已知限制
 
 - **网页半边改动必须重启 DSH 才生效**。`dsh --profile desktop` 被 Electron 独占，CLI 不能二次启动；`--dump-config` 也一样被拒。

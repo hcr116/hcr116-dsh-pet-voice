@@ -14,14 +14,26 @@ writeFileSync(join(家, 'dsh-pet-voice.json'), JSON.stringify({ voice: 'off', ma
 const 模 = await import('../index.js')
 
 /** 造一个假的 ctx，把路由 handler 抓出来。 */
-function 假ctx() {
+function 假ctx(选项 = {}) {
   const 监听 = []
   let 登记 = null
+  const 服务 = {
+    webServer: { port: 1234, register: (规格) => void (登记 = 规格) },
+    speechToText: 选项.有语音 === false ? undefined : {},
+  }
   const ctx = {
     logger: { info: () => {} },
     on: (名, 函数) => 监听.push([名, 函数]),
     effect: (函数) => 函数(),
-    get: (名) => (名 === 'webServer' ? { port: 1234, register: (规格) => void (登记 = 规格) } : undefined),
+    // 没有 inject 过的 ctx 读不到服务，所以这里只留一个"会抛"的 get：
+    // 强迫被测代码走 ctx.inject 那条正路（v2 之前就是栽在 ctx.get 上）
+    get: () => undefined,
+    inject: (依赖, 回调) => {
+      const 子 = { ...ctx }
+      for (const 名 of 依赖) 子[名] = 服务[名]
+      子.get = (名) => 服务[名]
+      return 回调(子)
+    },
   }
   模.apply(ctx)
   const 调 = async (路径, 体, 方法 = 'GET') => {
@@ -61,7 +73,7 @@ test('去表情：代理对与变体选择符都清掉', () => {
 })
 
 test('路由：/state 说得出自己是谁', async () => {
-  const { 调 } = 假ctx()
+  const { 调 } = 假ctx({ 有语音: false })
   const 回 = await 调('/dsh-pet-voice/state')
   assert.equal(回.码, 200)
   assert.equal(回.体.ok, true)
@@ -89,19 +101,16 @@ test('路由：/focus 记住前台会话，并且只念它', async () => {
 })
 
 test('路由：没有语音服务时 /stt 回 503，不发神经', async () => {
-  const { 调 } = 假ctx()
+  const { 调 } = 假ctx({ 有语音: false })
   const 回 = await 调('/dsh-pet-voice/stt', { audioBase64: Buffer.alloc(400).toString('base64') }, 'POST')
   assert.equal(回.码, 503)
   assert.equal(回.体.code, 'no-service')
 })
 
 test('路由：太短的音频直接 400', async () => {
-  const { 调, ctx } = 假ctx()
-  ctx.get = (名) => (名 === 'webServer' ? { port: 1234, register: () => {} } : 名 === 'speechToText' ? {} : undefined)
-  // 重新挂一次，让新 ctx 的 handler 生效
-  const 假 = 假ctx()
+  const 假 = 假ctx({ 有语音: true })
   const 回 = await 假.调('/dsh-pet-voice/stt', { audioBase64: Buffer.alloc(10).toString('base64') }, 'POST')
-  assert.equal(回.码, 503) // 没服务先回 503，比 400 更早
+  assert.equal(回.码, 400) // 有服务了，才轮得到太短这条
 })
 
 test('路由：/say 空文本回 400', async () => {
