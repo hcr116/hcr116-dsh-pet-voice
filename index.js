@@ -30,7 +30,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -101,6 +101,16 @@ function 记日志(ctx, 文) {
     else if (l && typeof l.info === 'function') l.info(文)
   } catch {
     /* 日志坏了也不能影响说话 */
+  }
+  // 顺手落一份到 ~/.dsh/dsh-pet-voice.log：桌面壳不写应用日志，出问题时只能从这里翻
+  try {
+    const 文件 = join(家目录(), 'dsh-pet-voice.log')
+    appendFileSync(文件, `[${new Date().toISOString()}] ${文}\n`)
+    if (statSync(文件).size > 256 * 1024) {
+      writeFileSync(文件, readFileSync(文件, 'utf8').slice(-128 * 1024))
+    }
+  } catch {
+    /* 落盘失败也算了 */
   }
 }
 
@@ -493,6 +503,7 @@ export function apply(ctx) {
       try {
         const 字节 = await 合成(ctx, cfg, 文本)
         await 播文件(落盘(字节))
+        记日志(ctx, `念完了（克隆嗓 ${字节.length} 字节）：${文本.slice(0, 24)}`)
         return
       } catch (错误) {
         记日志(ctx, `克隆嗓没出声，退 SAPI：${String((错误 && 错误.message) || 错误)}`)
@@ -501,6 +512,7 @@ export function apply(ctx) {
     // 下面这行是兜底：voice=sapi 直接走，voice=local 失败也走
     try {
       await 念SAPI(文本, cfg.sapi || 默认.sapi)
+      记日志(ctx, `念完了（SAPI 兜底）：${文本.slice(0, 24)}`)
     } catch (错误) {
       记日志(ctx, `SAPI 也没出声：${String((错误 && 错误.message) || 错误)}`)
     }
@@ -535,6 +547,23 @@ export function apply(ctx) {
     void 排空()
   }
 
+  // 一个 turn 只能念一次：turn/end 与 agent/turn-stopping 可能双双到来
+  const 已念过 = new Map()
+
+  function 该念了(id, turn, cfg) {
+    if (!id) return
+    // 只念你眼前那个会话：不然子代理（刷 B 站那种）也会被念出来
+    if (cfg.mainSessionOnly && 前台会话 && id !== 前台会话) return
+    if (turn !== undefined && 已念过.get(id) === turn) return
+    if (turn !== undefined) 已念过.set(id, turn)
+    const 全文 = 待念.get(id)
+    待念.delete(id)
+    if (!全文) return
+    const 句 = 挑要说的话(全文, cfg.maxChars)
+    if (!句 || 句.length < 2) return
+    排一句(句, id)
+  }
+
   ctx.on('session/event', (session, event) => {
     const cfg = 读配置()
     if (!cfg.enabled) return
@@ -547,15 +576,22 @@ export function apply(ctx) {
       return
     }
 
-    if (类型 === 'agent/turn-stopping') {
-      const 全文 = 待念.get(id)
-      待念.delete(id)
-      if (!全文) return
-      // 只念你眼前那个会话：不然子代理（刷 B 站那种）也会被念出来
-      if (cfg.mainSessionOnly && 前台会话 && id !== 前台会话) return
-      const 句 = 挑要说的话(全文, cfg.maxChars)
-      if (!句 || 句.length < 2) return
-      排一句(句, id)
+    // ⚠️ 一轮结束在 session/event 流里是 `turn/end`（不是 agent/turn-stopping！）
+    // V1 把它当成 session/event 的类型，于是永远不触发 —— 打字聊天一句都不念，就是这个 bug。
+    if (类型 === 'turn/end') 该念了(id, event && event.data && event.data.turn, cfg)
+  })
+
+  // 兜底：`agent/turn-stopping` 是 agent 级 cordis 事件（不进 session/event 流），
+  // 上面那条万一漏了（比如某个版本只发它），这里再兜一次；同一个 turn 不会念两遍。
+  ctx.on('agent/turn-stopping', (载荷) => {
+    try {
+      const cfg = 读配置()
+      if (!cfg.enabled) return
+      const 会话对象 = 载荷 && 载荷.agent && 载荷.agent.session
+      const id = String((会话对象 && 会话对象.id) || '')
+      该念了(id, 载荷 && 载荷.turn, cfg)
+    } catch (错误) {
+      记日志(ctx, `turn-stopping 兜底出错：${String((错误 && 错误.message) || 错误)}`)
     }
   })
 

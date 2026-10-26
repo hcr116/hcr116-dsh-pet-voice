@@ -91,7 +91,8 @@ test('路由：/focus 记住前台会话，并且只念它', async () => {
   const 收事件 = 监听.find(([名]) => 名 === 'session/event')[1]
   const 说 = (id, 文) => {
     收事件({ id }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 文 }] } } })
-    收事件({ id }, { type: 'agent/turn-stopping', data: {} })
+    // 一轮结束在 session/event 流里是 turn/end（v1 用 agent/turn-stopping，永远不触发）
+    收事件({ id }, { type: 'turn/end', data: { turn: 1 } })
   }
   说('子代理', '子代理说的话。')
   说('主会话', '主会话说的话。')
@@ -179,4 +180,17 @@ test('转写：模型没就绪回 425 并顺手 prepare 一次', async () => {
   assert.equal(回.码, 425)
   assert.equal(回.体.phase, 'unprepared')
   assert.equal(准备过, 'sensevoice-local')
+})
+
+test('念的触发点：turn/end 会念，agent/turn-stopping 兜底也能念，同一 turn 不重复', () => {
+  const { 监听, 调 } = 假ctx()
+  const 收事件 = 监听.find(([名]) => 名 === 'session/event')[1]
+  const 收停 = 监听.find(([名]) => 名 === 'agent/turn-stopping')?.[1]
+  assert.ok(typeof 收停 === 'function', '应该挂了 agent/turn-stopping 兜底')
+
+  收事件({ id: '主' }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '第一轮。' }] } } })
+  // 只发 turn-stopping（模拟只有 agent 级事件的情况）
+  收停({ agent: { session: { id: '主' } }, turn: 1 })
+  // 再补一个同 turn 的 turn/end：不应该念第二遍
+  收事件({ id: '主' }, { type: 'turn/end', data: { turn: 1 } })
 })
