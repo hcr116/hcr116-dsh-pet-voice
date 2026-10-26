@@ -2,6 +2,8 @@
 
 > 给「另一台电脑接着做」用。看完这份就能独立开工，不用回去翻对话。
 > 仓库根目录 = `D:\DafeiyuPet`（家里这台）。最后更新：2026-10-26。
+>
+> 兄弟文档：声音（口播 / 三条嗓子 / 克隆嗓装机）→ [`VOICE.md`](VOICE.md)；功能与安装 → [`README.md`](README.md)；规则与分期 → [`设计文档.md`](设计文档.md)。
 
 ---
 
@@ -17,7 +19,7 @@ Windows 桌面上的「大肥鱼」：一个无边框、置顶、可拖动的小
 | 提醒 | ✅ | 本地 `reminders.json`，每天或只一次，`HH:mm`；改文件 15 秒内自动重读 |
 | QQ 转述 | ✅ | 她 QQ 里说的每句话，桌面气泡 + 语音；一条 ssh 长连接盯着服务器上的 outbox |
 | 按住 U 说话 | ✅ | 按住录音 → `/stt` 认字 → 递给 DSH 开一轮 → 回答从 `/feed` 取回念出来 |
-| 语音 | ✅ | 两种：本地 SAPI（Microsoft Huihui，0 花费）或本机 GPT-SoVITS（`127.0.0.1:9880`） |
+| 语音 | ✅ | 三条嗓子：本地 SAPI（0 花费）/ 本机 GPT-SoVITS 克隆嗓（`127.0.0.1:9880`）/ Azure（要 key）；口播只念一句 |
 | 开机自启 | ✅ | `装开机自启.bat`（装的是 `%LOCALAPPDATA%` 里那份快照，不是仓库里这份） |
 
 ---
@@ -71,7 +73,7 @@ copy publish\DafeiyuPet.exe "$env:LOCALAPPDATA\Programs\DafeiyuPet\"
 | `Recorder.cs` | NAudio 录音，16 kHz / 单声道 / PCM16，返回 WAV；带峰值（太小当没说话） |
 | `PetBridge.cs` | 跟 `dsh-pet-bridge` 说话：`POST /stt`、`POST /say`、`GET /feed?after=`、`GET /ping` |
 | `Voice.cs` | 本地语音：SAPI（COM）+ GPT-SoVITS 两条路，失败自动退回 / 静音不报错 |
-| `AzureVoice.cs`、`GptSovits.cs` | 云/本地 TTS 的试验代码（`AzureVoice` 当前不启用，留着备选） |
+| `AzureVoice.cs`、`GptSovits.cs` | 云 / 本地 TTS：`azure` 走 Azure 神经语音（要 key）、`local` 走本机 GPT-SoVITS 克隆嗓（9880） |
 | `AddReminderWindow.xaml(.cs)` | 「加提醒」小窗：内容 + `HH:mm` + 每天/只一次 + 日期 |
 | `assets/feiyu.png` | 鱼的形象（560×554，透明边已裁） |
 | `bridge-plugin/` | DSH 侧插件 `dsh-pet-bridge` 的源码副本（**不是**桌宠的一部分，但对话要用它） |

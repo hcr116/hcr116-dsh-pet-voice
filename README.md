@@ -102,6 +102,11 @@ dotnet publish -c Release -o publish
 
 手工装也一样：**复制到 `%LOCALAPPDATA%\Programs\DafeiyuPet\` 再建快捷方式**，别原地跑。
 
+## 声音（口播 / 三条嗓子 / 克隆嗓）
+
+**完整说明见 [`VOICE.md`](VOICE.md)** —— 口播只念一句的规则、`sapi`/`local`/`azure` 三条嗓子怎么选、
+GPT-SoVITS 装机与参考音要求、报错对照、换机器怎么起步，都在那儿。
+
 ## 本地语音服务（GPT-SoVITS）开机自启
 
 嗓子里选「克隆嗓」（`Voice.Provider = local`）时，桌宠要靠本机 `http://127.0.0.1:9880` 的 `api_v2.py`。
