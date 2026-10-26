@@ -84,12 +84,13 @@ public partial class MainWindow : Window
         };
 
         try { _reminderMtime = File.GetLastWriteTime(PetConfig.ReminderPath); } catch { }
-        PetImage.MouseLeftButtonDown += OnPetMouseDown;
-        PetImage.MouseMove += OnPetMouseMove;
-        PetImage.MouseLeftButtonUp += OnPetMouseUp;
-        PetImage.LostMouseCapture += OnPetLostCapture;
+        // 挂在 Root 上：整扇窗都能拖（鱼身、透明边、气泡下方那块空白都行），不用瞄准
+        Root.MouseLeftButtonDown += OnPetMouseDown;
+        Root.MouseMove += OnPetMouseMove;
+        Root.MouseLeftButtonUp += OnPetMouseUp;
+        Root.LostMouseCapture += OnPetLostCapture;
         PetImage.MouseWheel += OnPetWheel;
-        PetImage.ContextMenu = BuildContextMenu();
+        Root.ContextMenu = BuildContextMenu();
     }
 
     // ---------------- 位置 / 缩放 ----------------
@@ -241,13 +242,22 @@ public partial class MainWindow : Window
         ClampToWorkArea();
     }
 
+    /// <summary>
+    /// 只保证「还有一块看得见、摸得着」，不把窗口硬拽回屏内：
+    /// 硬夹会在贴边拖动时把人拽回去（2026-10-26 实测：窗口已在最右边，往右拖 120px 一松手就弹回原位）。
+    /// 留 60 像素露在屏里就够抓住它。
+    /// </summary>
     private void ClampToWorkArea()
     {
+        const double 至少露出 = 60;
         var wa = SystemParameters.WorkArea;
-        if (ActualWidth > 0 && Left + ActualWidth > wa.Right) Left = wa.Right - ActualWidth;
-        if (ActualHeight > 0 && Top + ActualHeight > wa.Bottom) Top = wa.Bottom - ActualHeight;
-        if (Left < wa.Left) Left = wa.Left;
-        if (Top < wa.Top) Top = wa.Top;
+        var w = ActualWidth > 1 ? ActualWidth : 260;
+        var h = ActualHeight > 1 ? ActualHeight : 300;
+
+        if (Left > wa.Right - 至少露出) Left = wa.Right - 至少露出;
+        if (Top > wa.Bottom - 至少露出) Top = wa.Bottom - 至少露出;
+        if (Left + w < wa.Left + 至少露出) Left = wa.Left + 至少露出 - w;
+        if (Top + h < wa.Top + 至少露出) Top = wa.Top + 至少露出 - h;
     }
 
     // ---------------- 提醒 ----------------
@@ -687,39 +697,53 @@ public partial class MainWindow : Window
         }
         // 鼠标只管拖动（2026-10-26 改：说话挪到按住 U 键，两件事不再抢左键）。
         // 阈值放到 6 像素：不再需要"移动代表不想说话"那套判定，手一抖就是拖。
-        _downScreen = 桌标点位();
+        _downScreen = 屏点(e);
         _winAtDown = new System.Windows.Point(Left, Top);
         _dragging = false;
-        PetImage.CaptureMouse();
+        Log($"down: 光标={_downScreen.X:F0},{_downScreen.Y:F0} 窗口={Left:F0},{Top:F0} 源={e.OriginalSource?.GetType().Name}");
+        Root.CaptureMouse();
         e.Handled = true;
     }
 
-    /// <summary>光标在屏幕上的位置，不受窗口自己挪动影响。</summary>
-    private static System.Windows.Point 桌标点位()
-    {
-        var p = WinForms.Cursor.Position;
-        return new System.Windows.Point(p.X, p.Y);
-    }
+    /// <summary>
+    /// 光标在屏幕上的位置（设备无关单位）。走 WPF 自己的变换，所以和 Left/Top 同一把尺子；
+    /// 窗口挪了也没事：每次都是「窗口当前左上角 + 窗口内相对坐标」，算出来永远是光标真实位置。
+    /// ⚠ 别用 WinForms.Cursor.Position：它给的是物理像素，缩放 125% 时就对不上 Left/Top 了。
+    /// </summary>
+    private System.Windows.Point 屏点(System.Windows.Input.MouseEventArgs e)
+        => PointToScreen(e.GetPosition(this));
 
     private void OnPetMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        if (!PetImage.IsMouseCaptured || _dragging) return;
+        // ⚠ 别在这里写 `|| _dragging`：一开始拖 _dragging 就是 true，
+        //    后面每个 Move 都会被这个守卫挡掉 —— 表现就是"拖一下就不动了"（2026-10-25 实测过）。
+        if (!Root.IsMouseCaptured) return;
         if (e.LeftButton != MouseButtonState.Pressed) return;
 
-        var now = 桌标点位();
+        var now = 屏点(e);
         var dx = now.X - _downScreen.X;
         var dy = now.Y - _downScreen.Y;
-        if (Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
+        if (!_dragging && Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
 
         // 只挪窗口，不碰录音：录音由 U 键管
-        _dragging = true;
+        if (!_dragging)
+        {
+            // 以「判定成拖动的那一刻」为零点：按下到这一刻之间，气泡可能刚好收起来把窗口顶了一下，
+            // 用按下时的坐标当零点会让鱼跳一下（2026-10-26 实测偏 30~40 像素）。
+            _dragging = true;
+            _downScreen = now;
+            _winAtDown = new System.Windows.Point(Left, Top);
+            Log($"drag start: 窗口={Left:F0},{Top:F0}");
+            return;
+        }
+
         Left = _winAtDown.X + dx;
         Top = _winAtDown.Y + dy;
     }
 
     private void OnPetMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (PetImage.IsMouseCaptured) PetImage.ReleaseMouseCapture();
+        if (Root.IsMouseCaptured) Root.ReleaseMouseCapture();
 
         if (_dragging)
         {
@@ -728,6 +752,7 @@ public partial class MainWindow : Window
             _cfg.Left = Left;
             _cfg.Top = Top;
             _cfg.Save();
+            Log($"drag end: 窗口={Left:F0},{Top:F0}");
             RefreshMenuLabels();
             return;
         }
@@ -839,7 +864,7 @@ public partial class MainWindow : Window
     {
         if (!_listening) return;
         _listening = false;
-        if (PetImage.IsMouseCaptured) { try { PetImage.ReleaseMouseCapture(); } catch { } }
+        if (Root.IsMouseCaptured) { try { Root.ReleaseMouseCapture(); } catch { } }
         HideListenBadge();
 
         var 秒 = DateTime.Now - _listenStart;

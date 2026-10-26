@@ -1,0 +1,7 @@
+name: astrbot_plugin_pet_outbox
+display_name: 桌宠投喂口（大肥鱼 → 桌面）
+desc: 把大肥鱼在 QQ 里说的话追加到 outbox.jsonl，桌面桌宠轮询这个文件；顺带认「提醒我 9:30 喝水」这种话，写成提醒条目一起下发。
+version: 0.1.0
+author: hcr116
+repo: https://github.com/hcr116/archive-202302
+astrbot_version: ">=4.29.0"
