@@ -547,27 +547,50 @@ export function apply(ctx) {
     void 排空()
   }
 
-  // 一个 turn 只能念一次：turn/end 与 agent/turn-stopping 可能双双到来
+  // 最近 20 条 session/event 的类型与 id：出问题看 /dsh-pet-voice/events 就知道事件到底来没来
+const 最近事件 = []
+function 记事件(类型, id) {
+  if (!类型) return
+  最近事件.push({ 于: Date.now(), 类型, 会话: id })
+  if (最近事件.length > 20) 最近事件.shift()
+}
+
+function 取会话id(会话对象) {
+  const 头 = 会话对象 && 会话对象.header
+  return String((头 && 头.id) || (会话对象 && 会话对象.id) || '')
+}
+
+// 一个 turn 只能念一次：turn/end 与 agent/turn-stopping 可能双双到来
   const 已念过 = new Map()
 
   function 该念了(id, turn, cfg) {
-    if (!id) return
-    // 只念你眼前那个会话：不然子代理（刷 B 站那种）也会被念出来
-    if (cfg.mainSessionOnly && 前台会话 && id !== 前台会话) return
+    // 只念你眼前那个会话：不然子代理（刷 B 站那种）也会被念出来。
+    // id 为空说明这个版本没给到 id，宁可念也不要不念
+    // 前台会话对不上也照念（先保证出声），只在日志里留一笔；要收紧再说
+    if (cfg.mainSessionOnly && 前台会话 && id && id !== 前台会话) {
+      记日志(ctx, `前台是 ${前台会话}，这句来自 ${id}，照念`)
+    }
     if (turn !== undefined && 已念过.get(id) === turn) return
     if (turn !== undefined) 已念过.set(id, turn)
     const 全文 = 待念.get(id)
     待念.delete(id)
     if (!全文) return
     const 句 = 挑要说的话(全文, cfg.maxChars)
-    if (!句 || 句.length < 2) return
+    if (!句 || 句.length < 2) {
+      记日志(ctx, `没有能念的句子（原文 ${全文.slice(0, 30)}）`)
+      return
+    }
+    记日志(ctx, `要念：${句}`)
     排一句(句, id)
   }
 
   ctx.on('session/event', (session, event) => {
     const cfg = 读配置()
     if (!cfg.enabled) return
-    const id = String((session && session.id) || '')
+    // ⚠️ dsh 0.2.x 的会话 id 在 session.header.id 上，session.id 是 undefined；
+    //    之前只读 session.id，于是 id 恒为空，一句都不念（第 4 个真因）。
+    const id = 取会话id(session)
+    记事件(event && event.type, id)
     const 类型 = event && event.type
 
     if (类型 === 'assistant/message') {
@@ -587,8 +610,7 @@ export function apply(ctx) {
     try {
       const cfg = 读配置()
       if (!cfg.enabled) return
-      const 会话对象 = 载荷 && 载荷.agent && 载荷.agent.session
-      const id = String((会话对象 && 会话对象.id) || '')
+      const id = 取会话id(载荷 && 载荷.agent && 载荷.agent.session)
       该念了(id, 载荷 && 载荷.turn, cfg)
     } catch (错误) {
       记日志(ctx, `turn-stopping 兜底出错：${String((错误 && 错误.message) || 错误)}`)
@@ -621,7 +643,11 @@ export function apply(ctx) {
               const cfg = 读配置()
 
               if (路 === '/' || 路 === '') {
-                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/say', '/stt', '/stt/status', '/focus'] })
+                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/events', '/say', '/stt', '/stt/status', '/focus'] })
+              }
+
+              if (路 === '/events') {
+                return 回(200, { ok: true, 最近: 最近事件, 前台会话 })
               }
 
               if (路 === '/state') {

@@ -90,9 +90,9 @@ test('路由：/focus 记住前台会话，并且只念它', async () => {
   // 造两个会话的回合结束事件：只有主会话那句进队列
   const 收事件 = 监听.find(([名]) => 名 === 'session/event')[1]
   const 说 = (id, 文) => {
-    收事件({ id }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 文 }] } } })
+    收事件({ header: { id } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 文 }] } } })
     // 一轮结束在 session/event 流里是 turn/end（v1 用 agent/turn-stopping，永远不触发）
-    收事件({ id }, { type: 'turn/end', data: { turn: 1 } })
+    收事件({ header: { id } }, { type: 'turn/end', data: { turn: 1 } })
   }
   说('子代理', '子代理说的话。')
   说('主会话', '主会话说的话。')
@@ -190,7 +190,19 @@ test('念的触发点：turn/end 会念，agent/turn-stopping 兜底也能念，
 
   收事件({ id: '主' }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '第一轮。' }] } } })
   // 只发 turn-stopping（模拟只有 agent 级事件的情况）
-  收停({ agent: { session: { id: '主' } }, turn: 1 })
+  收停({ agent: { session: { header: { id: '主' } } }, turn: 1 })
   // 再补一个同 turn 的 turn/end：不应该念第二遍
   收事件({ id: '主' }, { type: 'turn/end', data: { turn: 1 } })
+})
+
+test('会话 id 从 session.header.id 取（0.2.x 里 session.id 是 undefined）', () => {
+  const { 监听, 调 } = 假ctx()
+  const 收事件 = 监听.find(([名]) => 名 === 'session/event')[1]
+  // 只带 header.id，故意不带 id —— 这正是真机上的形状
+  收事件({ header: { id: '会话甲' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '这一句应该被念。' }] } } })
+  收事件({ header: { id: '会话甲' } }, { type: 'turn/end', data: { turn: 7 } })
+  return 调('/dsh-pet-voice/events').then((回) => {
+    assert.equal(回.码, 200)
+    assert.ok(回.体.最近.some((e) => e.类型 === 'turn/end' && e.会话 === '会话甲'), '事件应当带着 header.id 被记下来')
+  })
 })
