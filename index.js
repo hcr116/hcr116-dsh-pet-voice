@@ -49,6 +49,8 @@ const 默认 = {
   maxChars: 40,
   /** 只念你眼前那个会话（网页半边会把当前会话 id 报上来） */
   mainSessionOnly: true,
+  /** 宠物自己冒出来的气泡（右键对话框聊天、戳它、碎碎念）也念出来 */
+  speakPetBubbles: true,
   /** 按住说话的键，只是给网页半边看的（它才是真正按键的那个） */
   hotkey: 'Ctrl+U',
   sovits: {
@@ -78,7 +80,9 @@ function 家目录() {
 
 function 读配置() {
   try {
-    const 原 = JSON.parse(readFileSync(join(家目录(), 'dsh-pet-voice.json'), 'utf8'))
+    // DSH_PET_VOICE_CONFIG 只给测试用：指到临时配置，别碰真的那份
+    const 路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
+    const 原 = JSON.parse(readFileSync(路, 'utf8'))
     const 合 = {
       ...默认,
       ...原,
@@ -224,6 +228,13 @@ function 宠物基址(ctx, cfg) {
   return `http://127.0.0.1:${端口}/dsh-pet-7340`
 }
 
+// 我们广播出去的句子：轮询宠物气泡时要跳过它们，否则自己说的话会被自己再念一遍
+const 我们发的 = []
+function 记我们发的(t) {
+  我们发的.push(t)
+  if (我们发的.length > 30) 我们发的.shift()
+}
+
 async function 说给桌宠(ctx, cfg, 文本) {
   const 基 = 宠物基址(ctx, cfg)
   if (!基) return { ok: false, reason: 'no-port', message: '拿不到 DSH 的 web 端口（dsh-pet 没跑？）' }
@@ -249,11 +260,13 @@ async function 说给桌宠(ctx, cfg, 文本) {
 
   const 锁号 = 锁.lockId
   try {
-    return await 送(`${基}/broadcast?pet=${宠物}&surface=${面}&lock=${encodeURIComponent(锁号)}`, {
+    const 结果 = await 送(`${基}/broadcast?pet=${宠物}&surface=${面}&lock=${encodeURIComponent(锁号)}`, {
       text: 文本,
       duration: cfg.bubbleMs,
       anim: true,
     })
+    if (结果 && 结果.ok) 记我们发的(文本)
+    return 结果
   } catch (错误) {
     return { ok: false, reason: 'broadcast-error', message: String((错误 && 错误.message) || 错误) }
   } finally {
@@ -463,7 +476,31 @@ async function 读体(req, 上限 = 8 * 1024 * 1024) {
 }
 
 // ---------- 给测试用的出口（不参与运行时逻辑） ----------
+  // ---------- 宠物自己的气泡 → 念出来 ----------
+// 宠物右键那个对话框（dsh-pet 的 /chat）是它自己调的模型（sessionId=PET_CALL_IDENTITY），
+// 不走 DSH 会话，所以 session/event 里根本看不到。它把回复写进 pets.<id>.say，
+// 这里长轮询 /state 盯住 say 变化，再念出来。
+function 清理气泡文本(文) {
+  // 去掉 dsh-pet 的配图标记 [图:名字] 和表情，只留能念的字
+  return 去表情(String(文 || '').replace(/\[图[:：][^\]]*\]/g, '')).trim()
+}
+
+let 盯气泡停 = false
+// 测试环境（node --test）里只跑几轮就收工，别把测试进程挂住
+const 盯气泡最多轮 = process.env.NODE_TEST_CONTEXT ? 3 : Infinity
+
+function 睡(毫秒) {
+  return new Promise((r) => {
+    const 句柄 = setTimeout(r, 毫秒)
+    // 不要为了这个定时器把进程挂着（否则 node --test 永远退不出去）
+    if (句柄 && typeof 句柄.unref === 'function') 句柄.unref()
+  })
+}
+
+
 export const __test = {
+  清理气泡文本,
+  停盯气泡: () => { 盯气泡停 = true },
   清干净,
   切一句,
   合成,
@@ -518,7 +555,7 @@ export function apply(ctx) {
     }
   }
 
-  async function 排空() {
+async function 排空() {
     if (忙) return
     忙 = true
     try {
@@ -535,6 +572,48 @@ export function apply(ctx) {
       忙 = false
     }
   }
+
+async function 盯气泡(ctx) {
+  let since = 0
+  let 上次文本 = ''
+  let 连续失败 = 0
+  for (let 轮 = 0; 轮 < 盯气泡最多轮; 轮++) {
+    if (盯气泡停) return
+    const cfg = 读配置()
+    if (!cfg.enabled || cfg.speakPetBubbles === false) {
+      await 睡(5000)
+      continue
+    }
+    const 基 = 宠物基址(ctx, cfg)
+    if (!基) {
+      await 睡(5000)
+      continue
+    }
+    try {
+      const 宠物 = encodeURIComponent(cfg.petId || 'main')
+      const 回 = await fetch(`${基}/state?pet=${宠物}&since=${since}&timeout=15000`, {
+        signal: AbortSignal.timeout(25000),
+      })
+      const j = await 回.json()
+      if (j && typeof j.counter === 'number') since = j.counter
+      连续失败 = 0
+      const 气泡 = j && j.pets && j.pets[cfg.petId || 'main'] && j.pets[cfg.petId || 'main'].say
+      const 文 = 气泡 && 气泡.data && 气泡.data.text ? 清理气泡文本(气泡.data.text) : ''
+      if (!文 || 文 === 上次文本) {
+        await 睡(250)
+        continue
+      }
+      上次文本 = 文
+      if (我们发的.includes(文)) continue // 自己刚广播的，跳过
+      if (文.length < 1) continue
+      记日志(ctx, `宠物自己说了一句，念它：${文.slice(0, 24)}`)
+      排一句(文.slice(0, 60), 'pet-chat')
+    } catch {
+      连续失败 += 1
+      await 睡(Math.min(30000, 2000 * 连续失败))
+    }
+  }
+}
 
   function 排一句(文本, 会话) {
     // 新的直接掐掉正在播的，并且把排队里旧的清掉 —— 只念最新的
@@ -775,6 +854,13 @@ function 取会话id(会话对象) {
     else 挂路由(ctx)
   } catch {
     /* 没有 webServer 就只做被动念，不影响启动 */
+  }
+
+  // 宠物自己的对话框（右键桌宠那个）：它不走 DSH 会话，只能盯气泡
+  try {
+    void 盯气泡(ctx)
+  } catch {
+    /* 盯不住也不影响别的 */
   }
 
   // 语音服务同理：apply 这一刻读不到，必须等注入（读到之前 /stt 会老实回 503）
