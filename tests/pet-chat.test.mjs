@@ -16,9 +16,11 @@ test('宠物别人的气泡会被念出来（右键对话框那条路）', async
   const 广播 = []
   let 第几次 = 0
   const 见过 = []
+  const 完整地址 = []
   const 假宠物 = createServer((req, res) => {
     const 路 = new URL(req.url, 'http://x').pathname
     见过.push(路)
+    完整地址.push(req.url)
     if (路 === '/dsh-pet-7340/state') {
       第几次 += 1
       const 体 =
@@ -91,6 +93,11 @@ test('宠物别人的气泡会被念出来（右键对话框那条路）', async
   假宠物.close()
   assert.ok(广播.length >= 1, '应该把她自己说的那句广播回来（= 念出来）；见过：' + 见过.join(' '))
   assert.match(广播[0], /温柔/)
+  // dsh-pet 的 timeout 只收 0..10000，给 15000 会被 400 拒掉、整条链静默死掉（踩过）
+  const 轮询 = 完整地址.find((u) => u.includes('/state'))
+  assert.ok(轮询, '要长轮询 /state')
+  const 超 = Number(/[?&]timeout=(\d+)/.exec(轮询)?.[1] || 0)
+  assert.ok(超 > 0 && 超 <= 10000, `timeout 必须落在 1..10000，实际 ${超}`)
 })
 
 test('清理气泡文本：去掉配图标记与表情', async () => {

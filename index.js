@@ -288,7 +288,7 @@ async function 说给桌宠(ctx, cfg, 文本) {
   if (结果 && 结果.reason === 'pet-not-displayed' && 结果.display && 结果.display !== 面) {
     面 = 结果.display
     记着的surface = 面
-    记日志(`桌宠的显示模式是 ${面}，按这个重发`)
+    记日志(ctx, `桌宠的显示模式是 ${面}，按这个重发`)
     结果 = await 发一遍(面)
   }
   return 结果
@@ -608,9 +608,14 @@ async function 盯气泡(ctx) {
     }
     try {
       const 宠物 = encodeURIComponent(cfg.petId || 'main')
-      const 回 = await fetch(`${基}/state?pet=${宠物}&since=${since}&timeout=15000`, {
-        signal: AbortSignal.timeout(25000),
+      // dsh-pet 的 timeout 只收 0..10000，给大了直接 400 invalid timeout（踩过）
+      const 回 = await fetch(`${基}/state?pet=${宠物}&since=${since}&timeout=8000`, {
+        signal: AbortSignal.timeout(15000),
       })
+      if (!回.ok) {
+        const 因 = await 回.text().catch(() => '')
+        throw new Error(`state HTTP ${回.status}：${String(因).slice(0, 120)}`)
+      }
       const j = await 回.json()
       if (j && typeof j.counter === 'number') since = j.counter
       连续失败 = 0
@@ -625,8 +630,10 @@ async function 盯气泡(ctx) {
       if (文.length < 1) continue
       记日志(ctx, `宠物自己说了一句，念它：${文.slice(0, 24)}`)
       排一句(文.slice(0, 60), 'pet-chat')
-    } catch {
+    } catch (错误) {
       连续失败 += 1
+      // 别再把错误吞掉了：之前 timeout=15000 被 400 拒了，日志里一点痕迹都没有
+      if (连续失败 <= 3 || 连续失败 % 30 === 0) 记日志(ctx, `盯气泡失败第 ${连续失败} 次：${String((错误 && 错误.message) || 错误)}`)
       await 睡(Math.min(30000, 2000 * 连续失败))
     }
   }
