@@ -106,7 +106,9 @@ public sealed class SshFeedConfig
     public bool Enabled { get; set; } = true;
     public string Host { get; set; } = "root@114.55.151.88";
     /// <summary>私钥路径。BotPanel 那个 key 一样，挪走了就改这里。</summary>
-    public string Key { get; set; } = @"D:\ds\dafeiyu\_hcr116.pem";
+    // 仓库里不含私钥：这个默认值是空的。
+    // 要在某台机器上启用 QQ 转述，就在那台机器的 %APPDATA%\\DafeiyuPet\\config.json 里自己填 Key。
+    public string Key { get; set; } = "";
     /// <summary>服务器上的 outbox 文件（astrbot_pet_outbox 插件写的）。</summary>
     public string Remote { get; set; } = "/opt/astrbot/data/plugin_data/astrbot_plugin_pet_outbox/outbox.jsonl";
     public int IntervalSeconds { get; set; } = 5;

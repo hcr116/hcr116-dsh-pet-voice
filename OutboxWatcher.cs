@@ -85,6 +85,11 @@ public sealed class OutboxWatcher
     public void Start()
     {
         if (!_cfg.Ssh.Enabled) return;
+        if (string.IsNullOrWhiteSpace(_cfg.Ssh.Key))
+        {
+            Log("没有配私钥，QQ 转述关着（这不影响气泡、提醒、语音、桥）");
+            return;
+        }
         _ = Task.Run(StreamLoopAsync);
     }
 
