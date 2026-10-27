@@ -57,13 +57,17 @@ dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只
 | `hotkey: "Ctrl+U"` | `listen.hotkey` |
 | `dida.enabled: false` | `dida.mode: "off"` |
 
-## 装（本机已装好，这段是重装时用的）
+## 装
 
 ```bash
-dsh plugin --profile desktop add "C:/Users/Administrator/.dsh/plugins/dsh-pet-voice"
+# 从仓库装（推荐给别人用）
+dsh plugin --profile desktop add "github:hcr116/dsh-pet-voice"
+
+# 本地开发时直接装目录
+dsh plugin --profile desktop add "C:/Users/<你>/.dsh/plugins/dsh-pet-voice"
 ```
 
-装完**重开 DSH**。它没有客户端半边（dsh.client），所以不参与浏览器启动检查——就算它自己坏了也砸不到界面。
+装完**重开 DSH**。（本插件有客户端半边，负责输入框旁那个「按住说话」入口。）
 
 ## 配
 

@@ -1,36 +1,40 @@
 {
-  "name": "dsh-pet-voice",
-  "version": "0.2.0",
-  "private": true,
-  "type": "module",
-  "description": "让 dsh-pet 当身体：按住 Ctrl+U 对它说话（本地转写进输入框），它回完一轮再挑一句口播用本机 GPT-SoVITS 克隆嗓念出来。",
-  "main": "index.js",
-  "exports": {
-    ".": "./index.js",
-    "./client": "./lib/client.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "index.js",
-    "lib",
-    "cordis.patch.yml",
-    "README.md",
-    "docs"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "slots"
-      ],
-      "external": [
-        "react"
-      ]
-    }
-  },
-  "license": "MIT"
+    "name":  "dsh-pet-voice",
+    "version":  "0.2.0",
+    "private":  true,
+    "type":  "module",
+    "main":  "index.js",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./lib/client.js",
+                    "./cordis.patch.yml":  "./cordis.patch.yml",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "index.js",
+                  "lib",
+                  "cordis.patch.yml",
+                  "README.md",
+                  "docs"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "slots"
+                                          ],
+                               "external":  [
+                                                "react"
+                                            ]
+                           }
+            },
+    "license":  "MIT",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git@github.com:hcr116/dsh-pet-voice.git"
+                   },
+    "description":  "把 DSH 的回答念给 dsh-pet 听；带语音输入与滴答清单到点提醒。能力全部可开关，给别人的机器也能用。"
 }
