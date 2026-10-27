@@ -1,40 +1,49 @@
 {
-    "name":  "dsh-pet-voice",
-    "version":  "0.2.0",
-    "private":  true,
-    "type":  "module",
-    "main":  "index.js",
-    "exports":  {
-                    ".":  "./index.js",
-                    "./client":  "./lib/client.js",
-                    "./cordis.patch.yml":  "./cordis.patch.yml",
-                    "./package.json":  "./package.json"
-                },
-    "files":  [
-                  "index.js",
-                  "lib",
-                  "cordis.patch.yml",
-                  "README.md",
-                  "docs"
-              ],
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           },
-                "client":  {
-                               "platform":  "web",
-                               "inject":  [
-                                              "slots"
-                                          ],
-                               "external":  [
-                                                "react"
-                                            ]
-                           }
-            },
-    "license":  "MIT",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "git@github.com:hcr116/hcr116-dsh-pet-voice.git"
-                   },
-    "description":  "把 DSH 的回答念给 dsh-pet 听；带语音输入与滴答清单到点提醒。能力全部可开关，给别人的机器也能用。"
+  "name": "dsh-pet-voice",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "config.example.json",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "dsh-pet": ">=0.3.8"
+  },
+  "peerDependenciesMeta": {
+    "dsh-pet": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:hcr116/hcr116-dsh-pet-voice.git"
+  },
+  "description": "把 DSH 的回答念给 dsh-pet 听；带语音输入与滴答清单到点提醒。能力全部可开关，给别人的机器也能用。"
 }

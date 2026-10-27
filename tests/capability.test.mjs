@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { __test } from '../index.js'
 
-const { 三档, 归一化配置, 探说, 探听, 探提醒, 体检文案 } = __test
+const { 三档, 归一化配置, 探说, 探听, 探身体, 探提醒, 体检文案 } = __test
 
 test('三档：只认 auto/on/off，大小写与脏值都收', () => {
   assert.equal(三档('on'), 'on')
@@ -107,6 +107,7 @@ test('探提醒：能读到凭证就算可用，读不到给原因', async () =>
 
 test('体检文案：说清能做和不能做的', () => {
   const 全 = 体检文案({
+    body: { available: true },
     speak: { available: true, provider: 'local' },
     listen: { available: true },
     dida: { available: true },
@@ -114,10 +115,32 @@ test('体检文案：说清能做和不能做的', () => {
   assert.match(全, /这台能：克隆嗓、嘀嗒提醒、麦克风/)
 
   const 光秃秃 = 体检文案({
+    body: { available: true },
     speak: { available: false, provider: 'none' },
     listen: { available: false },
     dida: { available: false },
   })
   assert.match(光秃秃, /只有气泡/)
   assert.match(光秃秃, /没有：说话|没有：嘀嗒提醒/)
+})
+
+test('体检文案：连身体都没装就直说', () => {
+  const 没身体 = 体检文案({ body: { available: false, reason: '没装 dsh-pet' } })
+  assert.match(没身体, /还没装宠物身体/)
+  assert.match(没身体, /dsh-pet/)
+})
+
+test('探身体：探针说通就算在，说断就给出安装命令', async () => {
+  const 在 = await 探身体(async () => true)
+  assert.equal(在.available, true)
+
+  const 不在 = await 探身体(async () => false)
+  assert.equal(不在.available, false)
+  assert.match(不在.reason, /dsh plugin --profile desktop add dsh-pet/)
+
+  const 炸了 = await 探身体(async () => {
+    throw new Error('ECONNREFUSED')
+  })
+  assert.equal(炸了.available, false)
+  assert.match(炸了.reason, /连不上 dsh-pet/)
 })

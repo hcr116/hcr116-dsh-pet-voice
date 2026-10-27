@@ -382,15 +382,35 @@ export async function 探提醒(配, 读凭证函数 = 读嘀嗒凭证) {
   }
 }
 
-/** 三项一起探。有语音服务这件事由调用方给（要 ctx） */
-export async function 探全部能力(配, 有语音服务) {
-  const [说, 提] = await Promise.all([探说(配), 探提醒(配)])
+/** 探"身体"在不在：dsh-pet 的 /state 通不通。它是**另一个包**（别人写的），没装就什么都没有。 */
+export async function 探身体(取状态) {
+  if (typeof 取状态 !== 'function') return { available: false, reason: '内部错误：没给探测函数' }
+  try {
+    const 通 = await 取状态()
+    return 通
+      ? { available: true, reason: '' }
+      : {
+          available: false,
+          reason: '没装 dsh-pet（宠物身体）：dsh plugin --profile desktop add dsh-pet',
+        }
+  } catch (错误) {
+    return { available: false, reason: `连不上 dsh-pet：${String((错误 && 错误.message) || 错误).slice(0, 40)}` }
+  }
+}
+
+/** 全部一起探。「有没有语音服务」「身体探针」都由调用方给（要 ctx） */
+export async function 探全部能力(配, 有语音服务, 取身体状态) {
+  const [说, 提, 身] = await Promise.all([探说(配), 探提醒(配), 探身体(取身体状态)])
   const 听 = 探听(配, 有语音服务)
-  return { speak: 说, listen: 听, dida: 提 }
+  return { body: 身, speak: 说, listen: 听, dida: 提 }
 }
 
 /** 首启体检说的一句人话 */
 export function 体检文案(能力) {
+  // 身体是前提：连宠物都没有，说别的没意义
+  if (!能力 || !能力.body || 能力.body.available === false) {
+    return '鱼鱼在。但这台还没装宠物身体（dsh-pet），我只能在后台念，你看不到我。'
+  }
   const 能 = []
   const 不能 = []
   const 记 = (项, 名) => (项 && 项.available ? 能 : 不能).push(名)
@@ -404,6 +424,7 @@ export function 体检文案(能力) {
 
 // ---------- 能力快照：整份插件共用一份，定期刷新 ----------
 const 能力快照 = {
+  body: { available: true, reason: '' },
   speak: { available: true, provider: 'auto', reason: '' },
   listen: { available: true, mode: 'auto', reason: '' },
   dida: { available: true, mode: 'auto', reason: '' },
@@ -885,6 +906,7 @@ export const __test = {
   归一化配置,
   探说,
   探听,
+  探身体,
   探提醒,
   探全部能力,
   体检文案,
@@ -1159,6 +1181,7 @@ function 取会话id(会话对象) {
                 return 回(200, {
                   ok: true,
                   探测于: 能力快照.探测于 || null,
+                  body: 能力快照.body,
                   speak: 能力快照.speak,
                   listen: 能力快照.listen,
                   dida: 能力快照.dida,
@@ -1522,15 +1545,31 @@ function 取会话id(会话对象) {
   // ---------- 能力探测 + 首启体检 ----------
   const 首启文件 = () => join(家目录(), 'dsh-pet-voice', 'first-run.json')
 
+  /** 探一下 dsh-pet 在不在：它自己的 /state 能通就算在 */
+  async function 身体在吗() {
+    const 配 = 读配置()
+    const 基 = 宠物基址(ctx, 配)
+    if (!基) return false
+    try {
+      const 宠物 = encodeURIComponent(配.petId || 'main')
+      // timeout=0 是即时返回（dsh-pet 只收 0..10000，给大了会被 400 拒）
+      const 回 = await fetch(`${基}/state?pet=${宠物}&timeout=0`, { signal: AbortSignal.timeout(2500) })
+      return 回.ok
+    } catch {
+      return false
+    }
+  }
+
   async function 刷新能力并记账() {
     try {
       const 配 = 读配置()
-      const 结果 = await 探全部能力(配, !!语音服务(ctx))
+      const 结果 = await 探全部能力(配, !!语音服务(ctx), 身体在吗)
       Object.assign(能力快照, 结果, { 探测于: Date.now(), 探过了: true })
+      const 身 = 结果.body.available ? '在' : `不在(${结果.body.reason})`
       const 说 = 结果.speak.available ? 结果.speak.provider : `不能(${结果.speak.reason})`
       const 听 = 结果.listen.available ? '可以' : `不行(${结果.listen.reason})`
       const 提 = 结果.dida.available ? '可以' : `不行(${结果.dida.reason})`
-      记日志(ctx, `能力探测：说=${说} 听=${听} 嘀嗒=${提}`)
+      记日志(ctx, `能力探测：身体=${身} 说=${说} 听=${听} 嘀嗒=${提}`)
     } catch (错误) {
       记日志(ctx, `能力探测出错：${String((错误 && 错误.message) || 错误)}`)
     }

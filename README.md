@@ -59,15 +59,28 @@ dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只
 
 ## 装
 
-```bash
-# 从仓库装（推荐给别人用）
-dsh plugin --profile desktop add "github:hcr116/hcr116-dsh-pet-voice"
+**⚠️ 要装两个包**：这个仓库只是「嘴和耳朵」，**宠物的身体是另一个包 `dsh-pet`**（形象、动画、气泡、右键菜单）。
+只装本插件的话，你什么都看不到——它会在后台安静地念，但屏幕上没有鱼。
 
-# 本地开发时直接装目录
-dsh plugin --profile desktop add "C:/Users/<你>/.dsh/plugins/dsh-pet-voice"
+```bash
+# ① 身体（别人写的，MIT，npm 上就有）
+dsh plugin --profile desktop add dsh-pet
+
+# ② 嘴和耳朵（本仓库）
+dsh plugin --profile desktop add "github:hcr116/hcr116-dsh-pet-voice"
 ```
 
-装完**重开 DSH**。（本插件有客户端半边，负责输入框旁那个「按住说话」入口。）
+装完**重开 DSH**。
+
+装之前想确认身体有没有？打开 `http://127.0.0.1:<端口>/dsh-pet-7340/state`，能返回 JSON 就是装了。
+本插件也会自己探：`GET /dsh-pet-voice/capabilities` 里的 `body.available` 就是答案，探不到时首启体检会直说
+「这台还没装宠物身体（dsh-pet）」。
+
+本地开发时也可以直接装目录：
+
+```bash
+dsh plugin --profile desktop add "C:/Users/<你>/.dsh/plugins/dsh-pet-voice"
+```
 
 ## 配
 
