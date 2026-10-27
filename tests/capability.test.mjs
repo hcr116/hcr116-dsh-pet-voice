@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { __test } from '../index.js'
 
-const { 三档, 归一化配置, 探说, 探听, 探身体, 探提醒, 体检文案 } = __test
+const { 三档, 归一化配置, 探说, 探听, 探身体, 探提醒, 体检文案, 体检清单 } = __test
 
 test('三档：只认 auto/on/off，大小写与脏值都收', () => {
   assert.equal(三档('on'), 'on')
@@ -143,4 +143,33 @@ test('探身体：探针说通就算在，说断就给出安装命令', async ()
   })
   assert.equal(炸了.available, false)
   assert.match(炸了.reason, /连不上 dsh-pet/)
+})
+
+test('体检清单：没身体就是 ok=false，并给出安装命令', () => {
+  const 报 = 体检清单({
+    body: { available: false, reason: '没装 dsh-pet' },
+    speak: { available: true, provider: 'sapi' },
+    listen: { available: false, reason: '没语音服务' },
+    dida: { available: true },
+  }, {}, '')
+  assert.equal(报.ok, false)
+  const 身体 = 报.检查项.find((x) => x.项.includes('身体'))
+  assert.equal(身体.状态, '❌')
+  assert.match(身体.怎么修, /dsh plugin --profile desktop add dsh-pet/)
+  assert.equal(报.检查项.length, 5)
+})
+
+test('体检清单：身体在就 ok=true，缺的能力标 ⛔ 并给出替代方案', () => {
+  const 报 = 体检清单({
+    body: { available: true },
+    speak: { available: false, reason: '没有 SAPI' },
+    listen: { available: false, reason: '没语音服务' },
+    dida: { available: false, reason: '没滴答' },
+  }, {}, 'C:/x/dsh-pet-voice.json')
+  assert.equal(报.ok, true)
+  const 听 = 报.检查项.find((x) => x.项.includes('耳朵'))
+  assert.equal(听.状态, '⛔')
+  assert.match(听.怎么修, /打字/)
+  const 配 = 报.检查项.find((x) => x.项 === '配置文件')
+  assert.match(配.说明, /dsh-pet-voice\.json/)
 })

@@ -422,6 +422,73 @@ export function 体检文案(能力) {
   return `鱼鱼在。${前半}${后半}。`
 }
 
+/**
+ * 体检清单（给 GET /dsh-pet-voice/doctor 用）。
+ *
+ * 和 体检文案 的区别：那是"说给主人听的一句话"，这是"逐条能拿来修的清单"。
+ * 判 ok 的标准只有一个：**身体装没装** —— 没身体的话这插件本来就没意义。
+ */
+export function 体检清单(能力, 配, 配置路径 = '') {
+  const 好 = (x) => !!(x && x.available)
+  const 项 = []
+
+  项.push(
+    好(能力 && 能力.body)
+       ? { 项: '身体（dsh-pet）', 状态: '✅', 说明: '在' }
+       : {
+           项: '身体（dsh-pet）',
+           状态: '❌',
+           说明: (能力 && 能力.body && 能力.body.reason) || '没装',
+           怎么修: 'dsh plugin --profile desktop add dsh-pet',
+         },
+  )
+
+  项.push(
+    好(能力 && 能力.speak)
+       ? { 项: '说话', 状态: '✅', 说明: (能力.speak && 能力.speak.provider) || 'auto' }
+       : {
+           项: '说话',
+           状态: '⛔',
+           说明: (能力 && 能力.speak && 能力.speak.reason) || '这台念不了',
+           怎么修: '起一个 GPT-SoVITS 到 127.0.0.1:9880，或换一台 Windows',
+         },
+  )
+
+  项.push(
+    好(能力 && 能力.listen)
+       ? { 项: '耳朵（麦克风）', 状态: '✅', 说明: '可以用' }
+       : {
+           项: '耳朵（麦克风）',
+           状态: '⛔',
+           说明: (能力 && 能力.listen && 能力.listen.reason) || '这台听不了',
+           怎么修: '装 DSH 的语音包；没有也行，直接打字',
+         },
+  )
+
+  项.push(
+    好(能力 && 能力.dida)
+       ? { 项: '嘀嗒提醒', 状态: '✅', 说明: '已读到凭证' }
+       : {
+           项: '嘀嗒提醒',
+           状态: '⛔',
+           说明: (能力 && 能力.dida && 能力.dida.reason) || '这台没有嘀嗒',
+           怎么修: '装滴答清单桌面客户端并登录；不想要就忽略这条',
+         },
+  )
+
+  项.push({
+    项: '配置文件',
+    状态: '✅',
+    说明: 配置路径 || '默认（没写过就用内置默认值）',
+  })
+
+  return {
+    ok: 好(能力 && 能力.body),
+    说明: 'ok=false 就是有硬伤（一般是身体没装）；⛔ 表示这台机器本来就没有，不影响别的',
+    检查项: 项,
+  }
+}
+
 // ---------- 能力快照：整份插件共用一份，定期刷新 ----------
 const 能力快照 = {
   body: { available: true, reason: '' },
@@ -910,6 +977,7 @@ export const __test = {
   探提醒,
   探全部能力,
   体检文案,
+  体检清单,
   重置注入: () => {
     注入过的语音服务 = null
     注入过的端口 = null
@@ -1173,7 +1241,20 @@ function 取会话id(会话对象) {
               const cfg = 读配置()
 
               if (路 === '/' || 路 === '') {
-                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
+                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/doctor', '/capabilities', '/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
+              }
+
+              if (路 === '/doctor') {
+                // 逐条体检：装没装身体、说/听/嘀嗒各是什么状态、缺了怎么补
+                const 配置路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
+                let 有配置 = false
+                try {
+                  readFileSync(配置路)
+                  有配置 = true
+                } catch {
+                  /* 没写过就是全默认 */
+                }
+                return 回(200, 体检清单(能力快照, cfg, 有配置 ? 配置路 : ''))
               }
 
               if (路 === '/capabilities') {

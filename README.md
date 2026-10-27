@@ -1,5 +1,20 @@
 # dsh-pet-voice · 给 dsh-pet 装一张嘴
 
+> ## ⚠️ 装之前先看这条
+>
+> **本仓库不是桌宠本体。** 它只是「嘴 + 耳朵 + 嘀嗒提醒」。
+> 宠物的**身体**（形象、动画、气泡、右键菜单）是**另一个包** [`dsh-pet`](https://github.com/PC2005-cloud/dsh-pet)（npm，MIT）。
+>
+> ```bash
+> dsh plugin --profile desktop add dsh-pet                                 # ① 身体（必须）
+> dsh plugin --profile desktop add "github:hcr116/hcr116-dsh-pet-voice"    # ② 嘴和耳朵（本仓库）
+> ```
+>
+> 只装 ② 的话：它会在后台安静地念，但**屏幕上没有鱼**——因为没身体可挂。
+> 不确定装没装？跑 `curl http://127.0.0.1:<端口>/dsh-pet-voice/doctor`，它会一条条告诉你缺什么、怎么补。
+>
+> 详细步骤见 [`docs/安装-给别人的机器.md`](docs/安装-给别人的机器.md)。
+
 把 DSH 的回答念给网页里那只大肥鱼听：**气泡 + 说话动画 + 本鲸的克隆嗓**。
 
 dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只管「说话」这一件事。
@@ -127,11 +142,35 @@ curl http://127.0.0.1:<端口>/dsh-pet-voice/dida
 **这一版不做**：写回嘀嗒、完成/推迟、习惯打卡、番茄钟、日历事件（`CalendarEventModel` 那条线）。
 提醒来源只认 `TaskModel.reminders[]`（`TRIGGER:PT0S` 这类 ISO 8601 偏移，加到 `dueDate` 上）。
 
-## 调（自己听一句）
+## 调（自己听一句 / 体检）
 
 ```bash
+# 逐条体检：身体装没装、说/听/嘀嗒各是什么状态、缺了怎么补
+curl http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/doctor
+
+# 三项能力 + 一句人话
+curl http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/capabilities
+
+# 让她念一句
 curl -X POST http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/say -H "content-type: application/json" -d "{\"text\":\"试音，本鲸的嗓子还活着。\"}"
 curl http://127.0.0.1:<DSH网页端口>/dsh-pet-voice/state
+```
+
+`/doctor` 的返回长这样（`ok:false` 就是有硬伤，一般是身体没装）：
+
+```jsonc
+{
+  "ok": false,
+  "检查项": [
+    { "项": "身体（dsh-pet）", "状态": "❌", "说明": "没装 dsh-pet",
+      "怎么修": "dsh plugin --profile desktop add dsh-pet" },
+    { "项": "说话", "状态": "✅", "说明": "sapi" },
+    { "项": "耳朵（麦克风）", "状态": "⛔", "说明": "这台没有语音识别服务（DSH 的语音包没装）",
+      "怎么修": "装 DSH 的语音包；没有也行，直接打字" },
+    { "项": "嘀嗒提醒", "状态": "✅", "说明": "已读到凭证" },
+    { "项": "配置文件", "状态": "✅", "说明": "~/.dsh/dsh-pet-voice.json" }
+  ]
+}
 ```
 
 端口就是 DSH 网页的端口（`dsh web` 打出来的那个，本机 7745）。这两个路由只绑 127.0.0.1、不鉴权，和 dsh-pet 自己的接口同一个口径。
