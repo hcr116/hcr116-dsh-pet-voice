@@ -1,0 +1,46 @@
+{
+  "enabled": true,
+  "petId": "main",
+  "surface": "web",
+  "bubbleMs": 9000,
+  "maxChars": 40,
+  "mainSessionOnly": true,
+  "speakPetBubbles": true,
+
+  "speak": {
+    "mode": "auto",
+    "provider": "auto",
+    "sovits": {
+      "url": "http://127.0.0.1:9880",
+      "refAudio": "",
+      "promptText": "",
+      "lang": "zh",
+      "speed": 1,
+      "timeoutMs": 3000
+    },
+    "sapi": {
+      "rate": 0,
+      "volume": 90,
+      "voice": ""
+    }
+  },
+
+  "listen": {
+    "mode": "auto",
+    "hotkey": "Ctrl+U",
+    "fallbackHotkey": "Ctrl+Shift+U"
+  },
+
+  "dida": {
+    "mode": "auto",
+    "cookie": "",
+    "dbPath": "",
+    "apiBase": "https://api.dida365.com",
+    "pollSeconds": 120,
+    "mergeWindowMs": 2000,
+    "quietFrom": "23:00",
+    "quietTo": "08:00"
+  },
+
+  "firstRunReport": true
+}

@@ -13,6 +13,50 @@ dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只
                  └─ PowerShell System.Media.SoundPlayer 念出来
 ```
 
+## 能力开关：给「打包给别人用」准备的
+
+这台机器有什么，不一定是别人那台有什么。所以三个能力各有 **`auto` / `on` / `off`** 三档：
+
+| 档 | 意思 |
+| --- | --- |
+| `auto`（默认） | 自己探测；探不到就**静默关掉**，只在 `~/.dsh/dsh-pet-voice.log` 里留一行 |
+| `on` | 强制启用；探不到会**提示一次**（好让你知道哪里没配好） |
+| `off` | 连探测都不做 |
+
+| 能力 | 配置 | `auto` 时探什么 | 探不到 |
+| --- | --- | --- | --- |
+| **说** | `speak.mode` + `speak.provider` | `local`：TCP 连一下 SoVITS；`sapi`：Windows 自带 | 只冒泡，不出声 |
+| **听** | `listen.mode` | DSH 有没有语音识别服务 | 输入框旁的入口**置灰**，点一下说原因 |
+| **提醒** | `dida.mode` | 本机能不能读到滴答的登录凭证 | 整个模块不启动，一句都不提 |
+
+装好第一次启动会冒一句体检（只提一次，记在 `~/.dsh/dsh-pet-voice/first-run.json`；删掉它就会再说一遍，`firstRunReport: false` 可永久关掉）：
+
+```
+鱼鱼在。这台能：说话、嘀嗒提醒。没有：麦克风。
+```
+
+**三种典型机器**
+
+| 机器 | 建议配置 |
+| --- | --- |
+| 只有 Windows 的办公机 | 全默认（`auto`）：能出声、能念嘀嗒，没麦就灰着 |
+| 家里那台（SoVITS + 麦 + 嘀嗒） | 全默认会自动全开；想强制就写 `"on"` |
+| 别人的机器 | 一个字都不用改：没装滴答就不提提醒，没麦就把入口置灰 |
+
+完整模板见 [`config.example.json`](config.example.json)。
+
+### 旧配置兼容
+
+以前那种写法照旧能用，读的时候映射过来：
+
+| 老键 | 等价于 |
+| --- | --- |
+| `voice: "off"` | `speak.mode: "off"` |
+| `voice: "sapi"` | `speak.provider: "sapi"` |
+| `voice: "local"` | `speak.provider: "local"` |
+| `hotkey: "Ctrl+U"` | `listen.hotkey` |
+| `dida.enabled: false` | `dida.mode: "off"` |
+
 ## 装（本机已装好，这段是重装时用的）
 
 ```bash

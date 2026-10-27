@@ -30,6 +30,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import net from 'node:net'
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -81,6 +82,8 @@ const 默认 = {
    */
   dida: {
     enabled: true,
+    /** 能力开关：auto 自己认 | on 强制（探不到会提示一次）| off 彻底不启动 */
+    mode: 'auto',
     /** 手动塞 cookie 可以绕过读库（调试或没装客户端时用） */
     cookie: '',
     /** 空 = %APPDATA%\Tick_Tick\TickTick.db */
@@ -94,30 +97,95 @@ const 默认 = {
     quietFrom: '23:00',
     quietTo: '08:00',
   },
+  /**
+   * 能力开关（给"打包给别人用"准备的）。
+   *
+   * 三个能力各有 auto/on/off 三档：
+   *   auto = 自己探测这台机器能不能用（探不到就静默关掉，只在日志里留一行）
+   *   on   = 强制启用；探不到会**提示一次**，好让人知道哪里没配好
+   *   off  = 连探测都不做
+   *
+   * 旧键（voice / sovits / sapi / hotkey / dida.enabled）照旧能用，
+   * 读配置的时候会映射进这套结构，老配置不用改。
+   */
+  speak: {
+    mode: 'auto', // auto | on | off —— 念不念
+    provider: 'auto', // auto | local | sapi
+  },
+  listen: {
+    mode: 'auto', // auto | on | off —— 麦克风入口要不要出
+    /** 按住说话的键（给网页半边看的） */
+    hotkey: 'Ctrl+U',
+    fallbackHotkey: 'Ctrl+Shift+U',
+  },
+  /** 装好后第一次启动说一句「这台能做什么」，之后不再提 */
+  firstRunReport: true,
 }
 
 function 家目录() {
   return process.env.DSH_HOME || join(homedir(), '.dsh')
 }
 
+/** auto / on / off 三档，认不出来就回兜底 */
+export function 三档(值, 兜底 = 'auto') {
+  const v = String(值 === undefined || 值 === null ? 兜底 : 值).trim().toLowerCase()
+  return v === 'on' || v === 'off' || v === 'auto' ? v : 兜底
+}
+
+/**
+ * 把用户写的那份配置归一成内部形状。
+ *
+ * 新结构是 speak/listen/dida 三块（各有 mode），但内部老代码还在用
+ * voice / sovits / sapi / hotkey / dida.enabled，所以这里做一次映射：
+ * 老配置照旧能用，新配置也能用。
+ */
+export function 归一化配置(原 = {}) {
+  const 合 = {
+    ...默认,
+    ...原,
+    sovits: { ...默认.sovits, ...(原.sovits || {}) },
+    sapi: { ...默认.sapi, ...(原.sapi || {}) },
+    stt: { ...默认.stt, ...(原.stt || {}) },
+    speak: { ...默认.speak, ...(原.speak || {}) },
+    listen: { ...默认.listen, ...(原.listen || {}) },
+    dida: { ...默认.dida, ...(原.dida || {}) },
+  }
+
+  // speak 块里也能写 sovits/sapi（新写法），优先级高于顶层
+  if (原.speak && 原.speak.sovits) 合.sovits = { ...合.sovits, ...原.speak.sovits }
+  if (原.speak && 原.speak.sapi) 合.sapi = { ...合.sapi, ...原.speak.sapi }
+
+  合.speak.mode = 三档(合.speak.mode)
+  合.listen.mode = 三档(合.listen.mode)
+  // 老的 dida.enabled:false 等价于现在的 mode:'off'
+  合.dida.mode = 原.dida && 原.dida.enabled === false ? 'off' : 三档(合.dida.mode)
+
+  // 老键 → 新结构
+  if (原.voice === 'off') 合.speak.mode = 'off'
+  else if (原.voice === 'sapi') 合.speak.provider = 'sapi'
+  else if (原.voice === 'local' && !(原.speak && 原.speak.provider)) 合.speak.provider = 'local'
+  合.speak.provider = String(合.speak.provider || 'auto').toLowerCase()
+  if (!['auto', 'local', 'sapi'].includes(合.speak.provider)) 合.speak.provider = 'auto'
+
+  // 内部老字段（别处还在读）
+  合.voice = 合.speak.mode === 'off' ? 'off' : 合.speak.provider === 'sapi' ? 'sapi' : 'local'
+  合.dida.enabled = 合.dida.mode !== 'off'
+  // 热键写在 listen 块里也算数（顶层 hotkey 是老写法，优先级更高）
+  if (!原.hotkey && 原.listen && 原.listen.hotkey) 合.hotkey = 合.listen.hotkey
+  if (!合.hotkey) 合.hotkey = 合.listen.hotkey
+
+  if (!Number.isFinite(Number(合.bubbleMs)) || Number(合.bubbleMs) < 500) 合.bubbleMs = 默认.bubbleMs
+  if (!Number.isFinite(Number(合.maxChars)) || Number(合.maxChars) < 6) 合.maxChars = 默认.maxChars
+  return 合
+}
+
 function 读配置() {
   try {
     // DSH_PET_VOICE_CONFIG 只给测试用：指到临时配置，别碰真的那份
     const 路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
-    const 原 = JSON.parse(readFileSync(路, 'utf8'))
-    const 合 = {
-      ...默认,
-      ...原,
-      sovits: { ...默认.sovits, ...(原 && 原.sovits) },
-      sapi: { ...默认.sapi, ...(原 && 原.sapi) },
-      stt: { ...默认.stt, ...(原 && 原.stt) },
-      dida: { ...默认.dida, ...(原 && 原.dida) },
-    }
-    if (!Number.isFinite(Number(合.bubbleMs)) || Number(合.bubbleMs) < 500) 合.bubbleMs = 默认.bubbleMs
-    if (!Number.isFinite(Number(合.maxChars)) || Number(合.maxChars) < 6) 合.maxChars = 默认.maxChars
-    return 合
+    return 归一化配置(JSON.parse(readFileSync(路, 'utf8')))
   } catch {
-    return { ...默认, sovits: { ...默认.sovits }, sapi: { ...默认.sapi }, stt: { ...默认.stt }, dida: { ...默认.dida } }
+    return 归一化配置({})
   }
 }
 
@@ -226,6 +294,121 @@ export function 挑要说的话(全文, 上限 = 口播上限) {
     return 切一句(净, 上限)
   }
   return ''
+}
+
+// ---------- 能力探测：这台机器能做什么 ----------
+//
+// 给"打包给别人用"准备的：三个能力各自 auto/on/off。
+// auto 探不到就静默关掉（只留一行日志）；on 探不到会提示一次。
+
+/** TCP 连一下（1.2 秒超时）。用来探 GPT-SoVITS 在不在。 */
+export function 探端口(地址, 超时 = 1200) {
+  return new Promise((收) => {
+    let u
+    try {
+      u = new URL(String(地址 || ''))
+    } catch {
+      return 收(false)
+    }
+    const 主机 = u.hostname
+    const 端口 = Number(u.port || (u.protocol === 'https:' ? 443 : 80))
+    if (!主机 || !端口) return 收(false)
+    const s = net.connect({ host: 主机, port: 端口 })
+    let 收过了 = false
+    const 了结 = (v) => {
+      if (收过了) return
+      收过了 = true
+      try {
+        s.destroy()
+      } catch {
+        /* 已经断了 */
+      }
+      收(v)
+    }
+    s.setTimeout(超时, () => 了结(false))
+    s.on('connect', () => 了结(true))
+    s.on('error', () => 了结(false))
+  })
+}
+
+/** 探"说"这个能力：返回 { available, provider, reason } */
+export async function 探说(配, 探端口函数 = 探端口) {
+  const 模 = 三档(配.speak && 配.speak.mode)
+  if (模 === 'off') return { available: false, provider: 'off', reason: '关掉了（speak.mode=off）' }
+
+  const 想用 = String((配.speak && 配.speak.provider) || 'auto').toLowerCase()
+  const 是Windows = process.platform === 'win32'
+  const 能SAPI = 是Windows
+  const 能用克隆 = !!配.sovits && !!(await 探端口函数((配.sovits && 配.sovits.url) || ''))
+
+  if (想用 === 'sapi') {
+    return 能SAPI
+      ? { available: true, provider: 'sapi', reason: '' }
+      : { available: false, provider: 'sapi', reason: '这台不是 Windows，没有 SAPI' }
+  }
+  if (想用 === 'local') {
+    return 能用克隆
+      ? { available: true, provider: 'local', reason: '' }
+      : 能SAPI
+        ? { available: true, provider: 'sapi', reason: '克隆嗓没起来，退 SAPI' }
+        : { available: false, provider: 'local', reason: '克隆嗓没起来，这台也没有 SAPI' }
+  }
+  // auto
+  if (能用克隆) return { available: true, provider: 'local', reason: '' }
+  if (能SAPI) return { available: true, provider: 'sapi', reason: '' }
+  return { available: false, provider: 'none', reason: '既没有克隆嗓也没有 SAPI' }
+}
+
+/** 探"听"这个能力：语音识别服务在不在（麦克风由网页半边自己判） */
+export function 探听(配, 有语音服务) {
+  const 模 = 三档(配.listen && 配.listen.mode)
+  if (模 === 'off') return { available: false, mode: 模, reason: '关掉了（listen.mode=off）' }
+  if (!有语音服务) {
+    return { available: false, mode: 模, reason: '这台没有语音识别服务（DSH 的语音包没装）' }
+  }
+  return { available: true, mode: 模, reason: '' }
+}
+
+/** 探"提醒"这个能力：本机有没有滴答客户端的数据 */
+export async function 探提醒(配, 读凭证函数 = 读嘀嗒凭证) {
+  const 模 = 三档(配.dida && 配.dida.mode)
+  if (模 === 'off') return { available: false, mode: 模, reason: '关掉了（dida.mode=off）' }
+  try {
+    const 凭证 = await 读凭证函数(配.dida || {})
+    if (凭证) return { available: true, mode: 模, reason: '' }
+    return { available: false, mode: 模, reason: '没找到滴答的登录凭证（没装客户端或没登录）' }
+  } catch (错误) {
+    return { available: false, mode: 模, reason: `读不到滴答数据：${String((错误 && 错误.message) || 错误).slice(0, 40)}` }
+  }
+}
+
+/** 三项一起探。有语音服务这件事由调用方给（要 ctx） */
+export async function 探全部能力(配, 有语音服务) {
+  const [说, 提] = await Promise.all([探说(配), 探提醒(配)])
+  const 听 = 探听(配, 有语音服务)
+  return { speak: 说, listen: 听, dida: 提 }
+}
+
+/** 首启体检说的一句人话 */
+export function 体检文案(能力) {
+  const 能 = []
+  const 不能 = []
+  const 记 = (项, 名) => (项 && 项.available ? 能 : 不能).push(名)
+  记(能力.speak, 能力.speak && 能力.speak.provider === 'local' ? '克隆嗓' : '说话')
+  记(能力.dida, '嘀嗒提醒')
+  记(能力.listen, '麦克风')
+  const 前半 = 能.length ? `这台能：${能.join('、')}` : '这台只有气泡'
+  const 后半 = 不能.length ? `。没有：${不能.join('、')}` : ''
+  return `鱼鱼在。${前半}${后半}。`
+}
+
+// ---------- 能力快照：整份插件共用一份，定期刷新 ----------
+const 能力快照 = {
+  speak: { available: true, provider: 'auto', reason: '' },
+  listen: { available: true, mode: 'auto', reason: '' },
+  dida: { available: true, mode: 'auto', reason: '' },
+  探测于: 0,
+  探过了: false,
 }
 
 // ---------- 嘀嗒清单：把「提醒」算成时刻 ----------
@@ -697,6 +880,14 @@ export const __test = {
   读嘀嗒凭证,
   读已念表,
   存已念表,
+  // 能力开关
+  三档,
+  归一化配置,
+  探说,
+  探听,
+  探提醒,
+  探全部能力,
+  体检文案,
   重置注入: () => {
     注入过的语音服务 = null
     注入过的端口 = null
@@ -731,6 +922,11 @@ export function apply(ctx) {
       return
     }
     if (cfg.voice === 'off') return
+    // 探测结论说"这台念不了"就别硬试了（也别每句都报错）
+    if (能力快照.探过了 && 能力快照.speak && 能力快照.speak.available === false) {
+      记日志(ctx, `（这台念不了：${能力快照.speak.reason}）只冒泡`)
+      return
+    }
     if (cfg.voice === 'local') {
       try {
         const 字节 = await 合成(ctx, cfg, 文本)
@@ -958,6 +1154,18 @@ function 取会话id(会话对象) {
                 return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
               }
 
+              if (路 === '/capabilities') {
+                // 网页半边拿这个决定「按住说话」入口是正常还是置灰
+                return 回(200, {
+                  ok: true,
+                  探测于: 能力快照.探测于 || null,
+                  speak: 能力快照.speak,
+                  listen: 能力快照.listen,
+                  dida: 能力快照.dida,
+                  文案: 体检文案(能力快照),
+                })
+              }
+
               if (路 === '/dida') {
                 // 诊断口：凭证有没有、排了几条、下一条是什么时候
                 return 回(200, {
@@ -1052,6 +1260,14 @@ function 取会话id(会话对象) {
               }
 
               if (路 === '/stt' && req.method === 'POST') {
+                // 能力开关说"这台听不了"就早点回，别让网页那边干等
+                if (能力快照.探过了 && 能力快照.listen && 能力快照.listen.available === false) {
+                  return 回(503, {
+                    ok: false,
+                    code: 'listen-off',
+                    error: 能力快照.listen.reason || '这台没开语音输入',
+                  })
+                }
                 const stt = 语音服务(ctx)
                 if (!stt) return 回(503, { ok: false, code: 'no-service', error: 'DSH 的语音服务没开着' })
                 const 体 = await 读体(req, 8 * 1024 * 1024)
@@ -1130,7 +1346,13 @@ function 取会话id(会话对象) {
 
   // 语音服务同理：apply 这一刻读不到，必须等注入（读到之前 /stt 会老实回 503）
   try {
-    if (typeof ctx.inject === 'function') ctx.inject(['speechToText'], (范围) => { 注入过的语音服务 = () => 范围.speechToText })
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['speechToText'], (范围) => {
+        注入过的语音服务 = () => 范围.speechToText
+        // 语音服务到位了，"听"这个能力可能就从不行变成行 —— 重新探一次
+        void 刷新能力并记账()
+      })
+    }
   } catch {
     /* 没有语音服务就只做被动念 */
   }
@@ -1139,6 +1361,11 @@ function 取会话id(会话对象) {
   function 启动嘀嗒提醒() {
     const 首配 = 读配置()
     if (!首配.dida || 首配.dida.enabled === false) return
+    // 能力探测说这机器用不了滴答（没装客户端/没登录），就别启动了
+    if (能力快照.探过了 && 能力快照.dida && 能力快照.dida.available === false) {
+      记日志(ctx, `嘀嗒：这台用不了（${能力快照.dida.reason}），不启动提醒`)
+      return
+    }
 
     const 已念 = 读已念表()
     const 定时器 = new Map()
@@ -1151,10 +1378,13 @@ function 取会话id(会话对象) {
     let 上次提示 = 0
 
     const 提示一次 = (文) => {
+      // 三档纪律：auto 探不到就静默（只记日志），只有 on 才冒泡告诉人
       const 现 = Date.now()
       if (现 - 上次提示 < 3600_000) return
       上次提示 = 现
       记日志(ctx, `嘀嗒：${文}`)
+      const 现在的配 = 读配置()
+      if (三档(现在的配.dida && 现在的配.dida.mode) !== 'on') return
       排一句(`嘀嗒这边有点问题：${文}`.slice(0, 60), 'dida')
     }
 
@@ -1289,9 +1519,68 @@ function 取会话id(会话对象) {
     }
   }
 
+  // ---------- 能力探测 + 首启体检 ----------
+  const 首启文件 = () => join(家目录(), 'dsh-pet-voice', 'first-run.json')
+
+  async function 刷新能力并记账() {
+    try {
+      const 配 = 读配置()
+      const 结果 = await 探全部能力(配, !!语音服务(ctx))
+      Object.assign(能力快照, 结果, { 探测于: Date.now(), 探过了: true })
+      const 说 = 结果.speak.available ? 结果.speak.provider : `不能(${结果.speak.reason})`
+      const 听 = 结果.listen.available ? '可以' : `不行(${结果.listen.reason})`
+      const 提 = 结果.dida.available ? '可以' : `不行(${结果.dida.reason})`
+      记日志(ctx, `能力探测：说=${说} 听=${听} 嘀嗒=${提}`)
+    } catch (错误) {
+      记日志(ctx, `能力探测出错：${String((错误 && 错误.message) || 错误)}`)
+    }
+  }
+
+  function 首启体检() {
+    const 配 = 读配置()
+    if (配.firstRunReport === false) return
+    try {
+      readFileSync(首启文件())
+      return // 体检过了
+    } catch {
+      /* 还没体检过，继续 */
+    }
+    const 文 = 体检文案(能力快照)
+    记日志(ctx, `首启体检：${文}`)
+    try {
+      排一句(文, 'first-run')
+    } catch {
+      /* 宠物没起也至少记了日志 */
+    }
+    try {
+      mkdirSync(join(家目录(), 'dsh-pet-voice'), { recursive: true })
+      writeFileSync(首启文件(), JSON.stringify({ at: Date.now(), 能力: 能力快照, 文 }, null, 1))
+    } catch {
+      /* 记不住就下次再说一遍 */
+    }
+  }
+
+  // 测试环境里不做这三件事：探测会真连端口、体检会往假宠物里塞一句话，
+  // 都会干扰别的用例（2026-10-27 实测：pet-chat 用例被体检那句抢了广播）
+  if (process.env.NODE_TEST_CONTEXT) {
+    return
+  }
+
+  void (async () => {
+    await 刷新能力并记账()
+    首启体检()
+    try {
+      启动嘀嗒提醒()
+    } catch (错误) {
+      记日志(ctx, `嘀嗒提醒没起来：${String((错误 && 错误.message) || 错误)}`)
+    }
+  })()
+
+  // 能力会变（比如 5 分钟后把 SoVITS 起来了、客户端登录了），定期重新探一次
   try {
-    启动嘀嗒提醒()
-  } catch (错误) {
-    记日志(ctx, `嘀嗒提醒没起来：${String((错误 && 错误.message) || 错误)}`)
+    const 能力定时 = setInterval(() => void 刷新能力并记账(), 5 * 60 * 1000)
+    if (typeof 能力定时.unref === 'function') 能力定时.unref()
+  } catch {
+    /* 定时器建不起来就算了 */
   }
 }
