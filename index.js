@@ -973,10 +973,21 @@ function 取会话id(会话对象) {
 
               if (路 === '/dida/fire' && req.method === 'POST') {
                 // 验证用：不等真提醒到点，直接按提醒的样式念一句（走同一条队列）
-                const 体 = (await 读体(req).catch(() => ({}))) || {}
-                const 文 = String(体.text || '到点：测一下提醒').slice(0, 60)
-                排一句(文, 'dida', 体.静音 === true)
-                return 回(200, { ok: true, 念了: 文, 静音: 体.静音 === true })
+                // 注意 读体() 返回的是 Buffer，不是对象（跟 /say 一个套路）
+                const 体 = await 读体(req, 64 * 1024)
+                let 文 = ''
+                let 静音 = false
+                try {
+                  const j = JSON.parse(体.toString('utf8') || '{}')
+                  文 = String(j.text || '').trim()
+                  静音 = j['静音'] === true || j.mute === true
+                } catch {
+                  /* 空体或坏 JSON 就用下面那句默认 */
+                }
+                if (!文) 文 = String(地址.searchParams.get('text') || '').trim()
+                if (!文) 文 = '到点：测一下提醒'
+                排一句(文.slice(0, 60), 'dida', 静音)
+                return 回(200, { ok: true, 念了: 文.slice(0, 60), 静音 })
               }
 
               if (路 === '/events') {
@@ -1131,6 +1142,8 @@ function 取会话id(会话对象) {
 
     const 已念 = 读已念表()
     const 定时器 = new Map()
+    /** 还没响的提醒（键 → 项），响了就摘掉，/dida 的「已排/下一条」靠它算 */
+    const 排队中 = new Map()
     let 待合并 = []
     let 合并句柄 = null
     let 停 = false
@@ -1148,10 +1161,15 @@ function 取会话id(会话对象) {
     const 清定时 = () => {
       for (const 句柄 of 定时器.values()) clearTimeout(句柄)
       定时器.clear()
+      排队中.clear()
     }
 
     /** 到点了：先攒 2 秒，同一分钟的几条合成一句 */
     function 到点(项, 配) {
+      // 响了就从"排队中"摘掉，否则 /dida 一直显示它
+      定时器.delete(项.键)
+      排队中.delete(项.键)
+      刷新快照()
       if (已念[项.键]) return
       已念[项.键] = Date.now()
       存已念表(已念)
@@ -1215,9 +1233,9 @@ function 取会话id(会话对象) {
 
     function 排期(任务们, 清单们, 配) {
       清定时()
+      排队中.clear()
       const 现 = Date.now()
       let 排了 = 0
-      let 最近 = null
       for (const 任务 of 任务们) {
         if (!该理这个任务(任务, 清单们)) continue
         for (const 项 of 算提醒时刻(任务)) {
@@ -1230,17 +1248,26 @@ function 取会话id(会话对象) {
           const 句柄 = setTimeout(() => 到点(项, 读配置()), Math.max(0, 差))
           if (typeof 句柄.unref === 'function') 句柄.unref()
           定时器.set(项.键, 句柄)
+          排队中.set(项.键, 项)
           排了 += 1
-          if (!最近 || 项.时刻 < 最近.时刻) 最近 = { 时刻: 项.时刻, 标题: 项.标题 }
         }
       }
       嘀嗒状态.凭证 = true
-      嘀嗒状态.已排 = 排了
-      嘀嗒状态.下一条 = 最近
       嘀嗒状态.任务数 = 任务们.length
       嘀嗒状态.上次拉取 = 现
       嘀嗒状态.错误 = ''
+      刷新快照()
       记日志(ctx, `嘀嗒：拉了 ${任务们.length} 个任务，排上 ${排了} 个提醒`)
+    }
+
+    /** 已排 / 下一条：从还挂着的那批里算，响了就自动少一条 */
+    function 刷新快照() {
+      嘀嗒状态.已排 = 排队中.size
+      let 最近 = null
+      for (const 项 of 排队中.values()) {
+        if (!最近 || 项.时刻 < 最近.时刻) 最近 = { 时刻: 项.时刻, 标题: 项.标题 }
+      }
+      嘀嗒状态.下一条 = 最近
     }
 
     void 拉一次()
