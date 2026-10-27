@@ -382,6 +382,17 @@ export async function 探提醒(配, 读凭证函数 = 读嘀嗒凭证) {
   }
 }
 
+/**
+ * 探活 dsh-pet 用的地址。
+ * dsh-pet 的 /state 里 since 和 timeout **必须成对**给，只给 timeout 直接 400
+ * （"since and timeout must be used together"）；探活只要当前状态，干脆两个都不给。
+ * 踩过：曾经拼 &timeout=0 想"即时返回"，结果身体在跑也被记成"不在"，体检一直 ok:false。
+ */
+export function 探活地址(基, 宠物) {
+  const id = encodeURIComponent(宠物 || 'main')
+  return `${String(基).replace(/\/+$/, '')}/state?pet=${id}`
+}
+
 /** 探"身体"在不在：dsh-pet 的 /state 通不通。它是**另一个包**（别人写的），没装就什么都没有。 */
 export async function 探身体(取状态) {
   if (typeof 取状态 !== 'function') return { available: false, reason: '内部错误：没给探测函数' }
@@ -973,6 +984,7 @@ export const __test = {
   归一化配置,
   探说,
   探听,
+  探活地址,
   探身体,
   探提醒,
   探全部能力,
@@ -1632,9 +1644,8 @@ function 取会话id(会话对象) {
     const 基 = 宠物基址(ctx, 配)
     if (!基) return false
     try {
-      const 宠物 = encodeURIComponent(配.petId || 'main')
-      // timeout=0 是即时返回（dsh-pet 只收 0..10000，给大了会被 400 拒）
-      const 回 = await fetch(`${基}/state?pet=${宠物}&timeout=0`, { signal: AbortSignal.timeout(2500) })
+      // 只探活，不要长轮询（since/timeout 必须成对，见 探活地址 的注释）
+      const 回 = await fetch(探活地址(基, 配.petId), { signal: AbortSignal.timeout(2500) })
       return 回.ok
     } catch {
       return false

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { __test } from '../index.js'
 
-const { 三档, 归一化配置, 探说, 探听, 探身体, 探提醒, 体检文案, 体检清单 } = __test
+const { 三档, 归一化配置, 探说, 探听, 探身体, 探活地址, 探提醒, 体检文案, 体检清单 } = __test
 
 test('三档：只认 auto/on/off，大小写与脏值都收', () => {
   assert.equal(三档('on'), 'on')
@@ -128,6 +128,18 @@ test('体检文案：连身体都没装就直说', () => {
   const 没身体 = 体检文案({ body: { available: false, reason: '没装 dsh-pet' } })
   assert.match(没身体, /还没装宠物身体/)
   assert.match(没身体, /dsh-pet/)
+})
+
+test('探活地址：since/timeout 必须成对，探活一个都不带（只给 timeout 会被 400）', () => {
+  const 址 = 探活地址('http://127.0.0.1:7340', 'main')
+  assert.equal(址, 'http://127.0.0.1:7340/state?pet=main')
+  assert.doesNotMatch(址, /timeout=/) // 回归：曾经拼 &timeout=0 → 400 → 身体被误判"不在"
+  assert.doesNotMatch(址, /since=/)
+
+  // 结尾斜杠、默认宠物、需要转义的 id 都要稳
+  assert.equal(探活地址('http://127.0.0.1:7340/', ''), 'http://127.0.0.1:7340/state?pet=main')
+  assert.equal(探活地址('http://127.0.0.1:7340//', null), 'http://127.0.0.1:7340/state?pet=main')
+  assert.equal(探活地址('http://x', '大 肥鱼'), 'http://x/state?pet=%E5%A4%A7%20%E8%82%A5%E9%B1%BC')
 })
 
 test('探身体：探针说通就算在，说断就给出安装命令', async () => {
