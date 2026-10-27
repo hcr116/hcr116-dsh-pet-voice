@@ -971,6 +971,14 @@ function 取会话id(会话对象) {
                 })
               }
 
+              if (路 === '/dida/fire' && req.method === 'POST') {
+                // 验证用：不等真提醒到点，直接按提醒的样式念一句（走同一条队列）
+                const 体 = (await 读体(req).catch(() => ({}))) || {}
+                const 文 = String(体.text || '到点：测一下提醒').slice(0, 60)
+                排一句(文, 'dida', 体.静音 === true)
+                return 回(200, { ok: true, 念了: 文, 静音: 体.静音 === true })
+              }
+
               if (路 === '/events') {
                 return 回(200, { ok: true, 最近: 最近事件, 前台会话 })
               }
