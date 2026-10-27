@@ -687,6 +687,29 @@ function 取会话id(会话对象) {
     排一句(句, id)
   }
 
+  // ⚠️ 2026-10-27 实测：这个版本的 DSH **根本不在 session/event 流里发 turn/end** ——
+  //    /dsh-pet-voice/events 里从头到尾只有 tool/call、tool/result、step/start、
+  //    step/end、assistant/message 五种，所以「等回合结束再念」永远等不到，一句都不出声。
+  //    改成「最后一条 assistant 之后静默 1.2 秒就念」：不依赖任何回合结束事件名，
+  //    真正的结束事件来了就立刻念（先到先念，另一个到时空跑一次，不会念两遍）。
+  const 沉默计时 = new Map()
+
+  function 安排沉默念(id, cfg) {
+    const 旧计时 = 沉默计时.get(id)
+    if (旧计时) clearTimeout(旧计时)
+    const 句柄 = setTimeout(() => {
+      沉默计时.delete(id)
+      该念了(id, undefined, 读配置())
+    }, 1200)
+    if (句柄 && typeof 句柄.unref === 'function') 句柄.unref()
+    沉默计时.set(id, 句柄)
+  }
+
+  function 取消沉默念(id) {
+    const 旧计时 = 沉默计时.get(id)
+    if (旧计时) { clearTimeout(旧计时); 沉默计时.delete(id) }
+  }
+
   ctx.on('session/event', (session, event) => {
     const cfg = 读配置()
     if (!cfg.enabled) return
@@ -698,13 +721,18 @@ function 取会话id(会话对象) {
 
     if (类型 === 'assistant/message') {
       const 全文 = 抽文本(event && event.data && event.data.message && event.data.message.content)
-      if (全文) 待念.set(id, 全文)
+      if (全文) {
+        待念.set(id, 全文)
+        安排沉默念(id, cfg)
+      }
       return
     }
 
-    // ⚠️ 一轮结束在 session/event 流里是 `turn/end`（不是 agent/turn-stopping！）
-    // V1 把它当成 session/event 的类型，于是永远不触发 —— 打字聊天一句都不念，就是这个 bug。
-    if (类型 === 'turn/end') 该念了(id, event && event.data && event.data.turn, cfg)
+    // 有回合结束事件就立刻念（名字各版本可能不同，能认出几个算几个）
+    if (类型 === 'turn/end' || 类型 === 'turn/ended' || 类型 === 'turn/stop' || 类型 === 'turn/finish') {
+      取消沉默念(id)
+      该念了(id, event && event.data && event.data.turn, cfg)
+    }
   })
 
   // 兜底：`agent/turn-stopping` 是 agent 级 cordis 事件（不进 session/event 流），
@@ -713,7 +741,10 @@ function 取会话id(会话对象) {
     try {
       const cfg = 读配置()
       if (!cfg.enabled) return
-      const id = 取会话id(载荷 && 载荷.agent && 载荷.agent.session)
+      let id = 取会话id(载荷 && 载荷.agent && 载荷.agent.session)
+      // 拿不到会话 id 时退回"你眼前那个会话"：否则 待念 里的内容永远对不上，一句都不念
+      if (!id) id = 前台会话 || ''
+      取消沉默念(id)
       该念了(id, 载荷 && 载荷.turn, cfg)
     } catch (错误) {
       记日志(ctx, `turn-stopping 兜底出错：${String((错误 && 错误.message) || 错误)}`)
