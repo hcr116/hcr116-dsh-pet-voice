@@ -72,6 +72,28 @@ const 默认 = {
     downloadSource: 'https://hf-mirror.com',
     timeoutMs: 120000,
   },
+  /**
+   * 嘀嗒清单的「到点提醒」：到点了冒个泡 + 念一句。
+   *
+   * 数据来自滴答自己的 web 接口（/api/v2/batch/check/0），凭证**不用手填**：
+   * 从本机客户端的 SQLite（%APPDATA%\Tick_Tick\TickTick.db 的 CommonSettings.LoginUserAuth）
+   * 里读出来当 Cookie 用。客户端重新登录，凭证自己就更新了。
+   */
+  dida: {
+    enabled: true,
+    /** 手动塞 cookie 可以绕过读库（调试或没装客户端时用） */
+    cookie: '',
+    /** 空 = %APPDATA%\Tick_Tick\TickTick.db */
+    dbPath: '',
+    apiBase: 'https://api.dida365.com',
+    /** 多久重新拉一次清单（秒）。到点触发靠本地定时器，不靠这个精度 */
+    pollSeconds: 120,
+    /** 同一分钟里好几条一起到点，合成一句，别连着响三声 */
+    mergeWindowMs: 2000,
+    /** 安静时段：只冒泡不出声。空字符串 = 不设 */
+    quietFrom: '23:00',
+    quietTo: '08:00',
+  },
 }
 
 function 家目录() {
@@ -89,12 +111,13 @@ function 读配置() {
       sovits: { ...默认.sovits, ...(原 && 原.sovits) },
       sapi: { ...默认.sapi, ...(原 && 原.sapi) },
       stt: { ...默认.stt, ...(原 && 原.stt) },
+      dida: { ...默认.dida, ...(原 && 原.dida) },
     }
     if (!Number.isFinite(Number(合.bubbleMs)) || Number(合.bubbleMs) < 500) 合.bubbleMs = 默认.bubbleMs
     if (!Number.isFinite(Number(合.maxChars)) || Number(合.maxChars) < 6) 合.maxChars = 默认.maxChars
     return 合
   } catch {
-    return { ...默认, sovits: { ...默认.sovits }, sapi: { ...默认.sapi }, stt: { ...默认.stt } }
+    return { ...默认, sovits: { ...默认.sovits }, sapi: { ...默认.sapi }, stt: { ...默认.stt }, dida: { ...默认.dida } }
   }
 }
 
@@ -203,6 +226,110 @@ export function 挑要说的话(全文, 上限 = 口播上限) {
     return 切一句(净, 上限)
   }
   return ''
+}
+
+// ---------- 嘀嗒清单：把「提醒」算成时刻 ----------
+//
+// 滴答任务里的提醒长这样：{ id, trigger: 'TRIGGER:-PT0S' }，
+// trigger 是 ISO 8601 时长，相对 dueDate 的偏移（负 = 提前）。目前用户库里全是 -PT0S（到点）。
+// dueDate 是 UTC 串（形如 2025-01-25T12:00:00.000+0000），任务自带 timeZone 但不影响
+// 绝对时刻，所以这里统一按时间戳算，展示/安静时段才用本地时间。
+
+/** 'TRIGGER:-PT10M' → -600（秒）；认 PnDTnHnMnS / PT0S。认不出来返回 null。 */
+export function 解析偏移秒(触发) {
+  const 原 = String(触发 || '').trim().replace(/^TRIGGER:/i, '')
+  const m = /^(-)?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i.exec(原)
+  if (!m) return null
+  const [, 负号, 天, 时, 分, 秒] = m
+  const 总 = Number(天 || 0) * 86400 + Number(时 || 0) * 3600 + Number(分 || 0) * 60 + Number(秒 || 0)
+  if (!Number.isFinite(总)) return null
+  // 0 秒别返回 -0（比较起来还是 0，但看着别扭，测试也会挑刺）
+  return 负号 && 总 !== 0 ? -总 : 总
+}
+
+/** 一个任务的所有提醒时刻（毫秒时间戳）。没到期日/没提醒返回 [] */
+export function 算提醒时刻(任务) {
+  const 出 = []
+  const 到期 = Date.parse((任务 && 任务.dueDate) || '')
+  if (!Number.isFinite(到期)) return 出
+  const 提醒们 = Array.isArray(任务 && 任务.reminders) ? 任务.reminders : []
+  for (const r of 提醒们) {
+    const 偏移 = 解析偏移秒(r && r.trigger)
+    if (偏移 === null) continue
+    const 时刻 = 到期 + 偏移 * 1000
+    if (!Number.isFinite(时刻)) continue
+    出.push({ 键: `${任务.id}:${(r && r.id) || 偏移}`, 时刻, 标题: String(任务.title || '').trim() })
+  }
+  return 出
+}
+
+/** 这个任务该不该置理：已完成/已删除/清单静音都跳过 */
+export function 该理这个任务(任务, 清单映射) {
+  if (!任务) return false
+  if (Number(任务.status) === 2) return false
+  if (任务.deleted === true) return false
+  const 清单 = 清单映射 && 清单映射.get ? 清单映射.get(任务.projectId) : null
+  if (清单 && (清单.muted === true || 清单.closed === true)) return false
+  return true
+}
+
+/** 同一批到点的合成一句：一条就「到点：X」，多条就「到点 3 件：X、Y、Z…」 */
+export function 合并提醒(到点们, 上限 = 40) {
+  const 题 = (到点们 || []).map((x) => String((x && x.标题) || '').trim()).filter(Boolean)
+  if (!题.length) return ''
+  if (题.length === 1) return `到点：${题[0]}`
+  const 头 = `到点 ${题.length} 件：`
+  let 文 = 头
+  for (const t of 题) {
+    const 下一段 = (文 === 头 ? '' : '、') + t
+    if (文.length + 下一段.length > 上限) {
+      文 += '…'
+      break
+    }
+    文 += 下一段
+  }
+  return 文
+}
+
+/** "23:00" → 1380（分钟）。认不出来返回 null */
+export function 解析时分(文) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(文 || '').trim())
+  if (!m) return null
+  const 时 = Number(m[1])
+  const 分 = Number(m[2])
+  if (时 > 23 || 分 > 59) return null
+  return 时 * 60 + 分
+}
+
+/** 现在在不在安静时段（支持跨零点，比如 23:00→08:00） */
+export function 在安静时段(时, 分, 从, 到) {
+  const 现 = 时 * 60 + 分
+  const a = 解析时分(从)
+  const b = 解析时分(到)
+  if (a === null || b === null || a === b) return false
+  return a < b ? 现 >= a && 现 < b : 现 >= a || 现 < b
+}
+
+/**
+ * 从本机滴答客户端的 SQLite 里读登录凭证，直接当 Cookie 的 t= 用。
+ * 客户端重新登录后这里读到的新值会跟着变 —— 不用手工维护 cookie。
+ */
+export async function 读嘀嗒凭证(dida) {
+  const 配 = dida || {}
+  if (配.cookie) return String(配.cookie)
+  const 库 = 配.dbPath || join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Tick_Tick', 'TickTick.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(库, { readOnly: true })
+  try {
+    const 行 = db.prepare('select LoginUserAuth a from CommonSettings limit 1').get()
+    return 行 && 行.a ? String(行.a) : ''
+  } finally {
+    try {
+      db.close()
+    } catch {
+      /* 关不掉就算了 */
+    }
+  }
 }
 
 // ---------- dsh-pet：HTTP 说话 ----------
@@ -427,8 +554,43 @@ function 落盘(字节) {
   return 文件
 }
 
-// ---------- 转写（懒取 speechToText，拿不到就 503） ----------
-// 注意：没有 inject 过的 ctx 读不到服务（cordis 会报 "cannot get property ... without inject"
+// ---------- 嘀嗒：运行快照（给 /dida 诊断口用）----------
+const 嘀嗒状态 = {
+  凭证: false,
+  已排: 0,
+  下一条: null,
+  上次拉取: 0,
+  任务数: 0,
+  错误: '',
+}
+
+// ---------- 嘀嗒：已念记录（重启不重念） ----------
+function 已念文件() {
+  return join(家目录(), 'dsh-pet-voice', 'dida-fired.json')
+}
+
+function 读已念表() {
+  try {
+    const 原 = JSON.parse(readFileSync(已念文件(), 'utf8'))
+    return 原 && typeof 原 === 'object' ? 原 : {}
+  } catch {
+    return {}
+  }
+}
+
+function 存已念表(表) {
+  try {
+    const 目录 = join(家目录(), 'dsh-pet-voice')
+    mkdirSync(目录, { recursive: true })
+    // 只留最近 500 条，免得文件越滚越大
+    const 条目 = Object.entries(表).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 500)
+    writeFileSync(已念文件(), JSON.stringify(Object.fromEntries(条目), null, 1))
+  } catch {
+    /* 记不住就退化成"可能重念一次"，不影响用 */
+  }
+}
+
+// ---------- 转写（懒取 speechToText，拿不到就 503） ----------// 注意：没有 inject 过的 ctx 读不到服务（cordis 会报 "cannot get property ... without inject"
 // 或直接返回 undefined），所以真正的服务句柄要在 apply 里 ctx.inject(['speechToText'], …) 拿到。
 let 注入过的语音服务 = null
 let 注入过的端口 = null
@@ -525,6 +687,16 @@ export const __test = {
   念SAPI,
   取准备,
   已就绪,
+  // 嘀嗒提醒
+  解析偏移秒,
+  算提醒时刻,
+  该理这个任务,
+  合并提醒,
+  解析时分,
+  在安静时段,
+  读嘀嗒凭证,
+  读已念表,
+  存已念表,
   重置注入: () => {
     注入过的语音服务 = null
     注入过的端口 = null
@@ -543,7 +715,9 @@ export function apply(ctx) {
   /** 网页报上来的「你正看着的会话」 */
   let 前台会话 = ''
 
-  async function 念(文本) {
+  async function 念(文本, 选项 = {}) {
+    // 选项.speak === false：只冒泡，不出声（安静时段、静音时用）
+    const 要出声 = 选项.speak !== false
     const cfg = 读配置()
     const 桌宠 = await 说给桌宠(ctx, cfg, 文本)
     if (!桌宠 || !桌宠.ok) {
@@ -551,6 +725,10 @@ export function apply(ctx) {
       记日志(ctx, `桌宠没说成：${因}`)
     } else {
       记日志(ctx, `桌宠张嘴了：${文本.slice(0, 40)}`)
+    }
+    if (!要出声) {
+      记日志(ctx, `（安静模式，只冒泡没出声）：${文本.slice(0, 24)}`)
+      return
     }
     if (cfg.voice === 'off') return
     if (cfg.voice === 'local') {
@@ -579,7 +757,7 @@ async function 排空() {
       while (队列.length) {
         const 件 = 队列.shift()
         try {
-          await 念(件.文本)
+          await 念(件.文本, { speak: 件.静音 !== true })
           上次 = { 文本: 件.文本, 于: Date.now(), 会话: 件.会话 }
         } catch (错误) {
           记日志(ctx, `这一句没念成：${String((错误 && 错误.message) || 错误)}`)
@@ -639,13 +817,13 @@ async function 盯气泡(ctx) {
   }
 }
 
-  function 排一句(文本, 会话) {
+  function 排一句(文本, 会话, 静音 = false) {
     // 新的直接掐掉正在播的，并且把排队里旧的清掉 —— 只念最新的
     if (忙) {
       队列.length = 0
       掐掉正在播的()
     }
-    队列.push({ 文本, 会话 })
+    队列.push({ 文本, 会话, 静音: 静音 === true })
     if (队列.length > 3) 队列.shift()
     void 排空()
   }
@@ -777,7 +955,20 @@ function 取会话id(会话对象) {
               const cfg = 读配置()
 
               if (路 === '/' || 路 === '') {
-                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/events', '/say', '/stt', '/stt/status', '/focus'] })
+                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
+              }
+
+              if (路 === '/dida') {
+                // 诊断口：凭证有没有、排了几条、下一条是什么时候
+                return 回(200, {
+                  ok: true,
+                  enabled: cfg.dida && cfg.dida.enabled !== false,
+                  安静时段: `${(cfg.dida && cfg.dida.quietFrom) || ''}-${(cfg.dida && cfg.dida.quietTo) || ''}`,
+                  ...嘀嗒状态,
+                  下一条: 嘀嗒状态.下一条
+                    ? { 时刻: new Date(嘀嗒状态.下一条.时刻).toLocaleString('zh-CN'), 标题: 嘀嗒状态.下一条.标题 }
+                    : null,
+                })
               }
 
               if (路 === '/events') {
@@ -923,5 +1114,149 @@ function 取会话id(会话对象) {
     if (typeof ctx.inject === 'function') ctx.inject(['speechToText'], (范围) => { 注入过的语音服务 = () => 范围.speechToText })
   } catch {
     /* 没有语音服务就只做被动念 */
+  }
+
+  // ---------- 嘀嗒清单：到点了说一句 ----------
+  function 启动嘀嗒提醒() {
+    const 首配 = 读配置()
+    if (!首配.dida || 首配.dida.enabled === false) return
+
+    const 已念 = 读已念表()
+    const 定时器 = new Map()
+    let 待合并 = []
+    let 合并句柄 = null
+    let 停 = false
+    let 凭证缓存 = ''
+    let 上次提示 = 0
+
+    const 提示一次 = (文) => {
+      const 现 = Date.now()
+      if (现 - 上次提示 < 3600_000) return
+      上次提示 = 现
+      记日志(ctx, `嘀嗒：${文}`)
+      排一句(`嘀嗒这边有点问题：${文}`.slice(0, 60), 'dida')
+    }
+
+    const 清定时 = () => {
+      for (const 句柄 of 定时器.values()) clearTimeout(句柄)
+      定时器.clear()
+    }
+
+    /** 到点了：先攒 2 秒，同一分钟的几条合成一句 */
+    function 到点(项, 配) {
+      if (已念[项.键]) return
+      已念[项.键] = Date.now()
+      存已念表(已念)
+      待合并.push(项)
+      if (合并句柄) return
+      合并句柄 = setTimeout(() => {
+        合并句柄 = null
+        const 这一批 = 待合并
+        待合并 = []
+        if (!这一批.length) return
+        const 最新配 = 读配置()
+        const 现 = new Date()
+        const 静音 = 在安静时段(现.getHours(), 现.getMinutes(), 最新配.dida.quietFrom, 最新配.dida.quietTo)
+        const 文 = 合并提醒(这一批, 最新配.maxChars)
+        if (!文) return
+        记日志(ctx, `嘀嗒到点${静音 ? '（安静时段，只冒泡）' : ''}：${文}`)
+        排一句(文, 'dida', 静音)
+      }, Math.max(500, Number(配.dida.mergeWindowMs) || 默认.dida.mergeWindowMs))
+      if (合并句柄 && typeof 合并句柄.unref === 'function') 合并句柄.unref()
+    }
+
+    /** 拉一次清单，给未来一周内的提醒各排一个定时器 */
+    async function 拉一次() {
+      if (停) return
+      const 配 = 读配置()
+      if (!配.dida || 配.dida.enabled === false) return
+      try {
+        if (!凭证缓存) 凭证缓存 = await 读嘀嗒凭证(配.dida)
+        if (!凭证缓存) {
+          提示一次('找不到登录凭证，客户端登录一下就好')
+          return
+        }
+        const 基 = String(配.dida.apiBase || 默认.dida.apiBase).replace(/\/$/, '')
+        const 回 = await fetch(`${基}/api/v2/batch/check/0`, {
+          headers: {
+            Cookie: `t=${凭证缓存}`,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            Accept: 'application/json',
+            // 少了这个头会被判 403 access_forbidden（2026-10-27 实测）
+            'x-device': JSON.stringify({ platform: 'web', os: 'web', device: 'chrome', name: '' }),
+          },
+          signal: AbortSignal.timeout(15000),
+        })
+        if (回.status === 401 || 回.status === 403) {
+          凭证缓存 = ''
+          提示一次('凭证失效了，在客户端里重新登录一下')
+          return
+        }
+        if (!回.ok) {
+          提示一次(`接口 ${回.status}`)
+          return
+        }
+        const j = await 回.json()
+        const 任务们 = (j && j.syncTaskBean && j.syncTaskBean.update) || []
+        const 清单们 = new Map(((j && j.projectProfiles) || []).map((p) => [p.id, p]))
+        排期(任务们, 清单们, 配)
+      } catch (错误) {
+        提示一次(`拉清单失败：${String((错误 && 错误.message) || 错误).slice(0, 40)}`)
+      }
+    }
+
+    function 排期(任务们, 清单们, 配) {
+      清定时()
+      const 现 = Date.now()
+      let 排了 = 0
+      let 最近 = null
+      for (const 任务 of 任务们) {
+        if (!该理这个任务(任务, 清单们)) continue
+        for (const 项 of 算提醒时刻(任务)) {
+          if (已念[项.键]) continue
+          const 差 = 项.时刻 - 现
+          // 过期超过 3 分钟的不管（刚启动时别把昨天的一堆补念一遍）
+          if (差 < -3 * 60_000) continue
+          // 一周以外的先不排（setTimeout 上限也不建议太长）
+          if (差 > 7 * 24 * 3600_000) continue
+          const 句柄 = setTimeout(() => 到点(项, 读配置()), Math.max(0, 差))
+          if (typeof 句柄.unref === 'function') 句柄.unref()
+          定时器.set(项.键, 句柄)
+          排了 += 1
+          if (!最近 || 项.时刻 < 最近.时刻) 最近 = { 时刻: 项.时刻, 标题: 项.标题 }
+        }
+      }
+      嘀嗒状态.凭证 = true
+      嘀嗒状态.已排 = 排了
+      嘀嗒状态.下一条 = 最近
+      嘀嗒状态.任务数 = 任务们.length
+      嘀嗒状态.上次拉取 = 现
+      嘀嗒状态.错误 = ''
+      记日志(ctx, `嘀嗒：拉了 ${任务们.length} 个任务，排上 ${排了} 个提醒`)
+    }
+
+    void 拉一次()
+    const 刷新 = setInterval(() => void 拉一次(), Math.max(30, Number(首配.dida.pollSeconds) || 120) * 1000)
+    if (typeof 刷新.unref === 'function') 刷新.unref()
+
+    // 插件卸载/重载时收摊，别留一堆定时器
+    try {
+      if (typeof ctx.effect === 'function') {
+        ctx.effect(() => () => {
+          停 = true
+          clearInterval(刷新)
+          清定时()
+          if (合并句柄) clearTimeout(合并句柄)
+        }, 'dsh-pet-voice: 嘀嗒提醒')
+      }
+    } catch {
+      /* 没有 effect 就算了，进程退出时定时器一起没 */
+    }
+  }
+
+  try {
+    启动嘀嗒提醒()
+  } catch (错误) {
+    记日志(ctx, `嘀嗒提醒没起来：${String((错误 && 错误.message) || 错误)}`)
   }
 }

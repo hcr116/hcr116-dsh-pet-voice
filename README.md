@@ -38,6 +38,34 @@ dsh plugin --profile desktop add "C:/Users/Administrator/.dsh/plugins/dsh-pet-vo
 | `sovits.promptText` | 参考音对应的那句话 | 必须和参考音一致，否则音色跑偏 |
 | `sovits.speed` | `1` | 语速，0.5~2 |
 
+### 嘀嗒清单的「到点提醒」
+
+到点了鱼鱼冒个泡 + 念一句。**只念你已经在嘀嗒里配了提醒的任务**（没配提醒的到期限也不念）。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `dida.enabled` | `true` | 关掉就不拉嘀嗒 |
+| `dida.pollSeconds` | `120` | 多久重新拉一次任务（到点触发靠本地定时器，不受这个影响） |
+| `dida.mergeWindowMs` | `2000` | 同一分钟几条撞一起时，攒这么久合成一句 |
+| `dida.quietFrom` / `quietTo` | `23:00` / `08:00` | 安静时段：**只冒泡不出声**；两个都填空 = 不设 |
+| `dida.cookie` | 空 | 一般不用填。空 = 自动从本机客户端读 |
+| `dida.dbPath` | 空 | 空 = `%APPDATA%\Tick_Tick\TickTick.db` |
+
+**凭证怎么来的**：读本机滴答客户端 SQLite 里 `CommonSettings.LoginUserAuth`，直接当 Cookie 的 `t=` 用。
+你在客户端重新登录，凭证自己就更新了，不用手工维护。
+
+**诊断**：
+
+```bash
+curl http://127.0.0.1:<端口>/dsh-pet-voice/dida
+# → { ok, enabled, 凭证, 已排, 下一条:{时刻,标题}, 上次拉取, 任务数, 错误 }
+```
+
+`已排` 是「未来一周内排上的提醒条数」。它是 0 但你在嘀嗒里明明配了提醒，先看 `凭证` 和 `错误`。
+
+**这一版不做**：写回嘀嗒、完成/推迟、习惯打卡、番茄钟、日历事件（`CalendarEventModel` 那条线）。
+提醒来源只认 `TaskModel.reminders[]`（`TRIGGER:PT0S` 这类 ISO 8601 偏移，加到 `dueDate` 上）。
+
 ## 调（自己听一句）
 
 ```bash
