@@ -12,3 +12,4 @@ bin/
 obj/
 publish/
 _tmp/
+_msg.txt

@@ -35,7 +35,39 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkS
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { 渲染设置页 } from './lib/settings-page.js'
+/**
+ * 设置页的渲染函数，**懒加载**（第一次开设置页时才 import）。
+ *
+ * 原来是在文件顶部静态 import './lib/settings-page.js'，2026-10-27 重启后整个插件
+ * 都没起来（/dsh-pet-voice/ 变裸 404、日志零增长）——怀疑和这条相对 import 有关，
+ * 但 DSH 不留任何错误信息，没法证实。改成懒加载后：就算那一行有问题，
+ * 也只影响「打开设置页」这一个动作，不会连带把嘴和耳朵一起弄死。
+ */
+let 设置页渲染器 = null
+async function 取设置页渲染器() {
+  if (设置页渲染器) return 设置页渲染器
+  const 模 = await import('./lib/settings-page.js')
+  设置页渲染器 = 模.渲染设置页
+  return 设置页渲染器
+}
+
+/**
+ * 启动自证：模块一被 import 就落一行。
+ *
+ * 为什么要有：DSH 加载插件失败时**什么日志都不留**（2026-10-27 实测：重启后
+ * /dsh-pet-voice/ 变裸 404、dsh-pet-voice.log 一个字节没涨，分不清是
+ * 「模块没加载」还是「加载了但 apply 没跑」。这几行的有无就是答案。
+ */
+function 自证(文) {
+  try {
+    if (process.env.NODE_TEST_CONTEXT) return
+    appendFileSync(join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'dsh-pet-voice.log'), `[${new Date().toISOString()}] [自证] ${文}\n`)
+  } catch {
+    /* 自证失败也不能影响加载 */
+  }
+}
+
+自证('模块加载完成（入口 index.js）')
 
 export const name = 'dsh-pet-voice'
 
@@ -1085,6 +1117,7 @@ export const __test = {
 
 // ---------- 主逻辑 ----------
 export function apply(ctx) {
+  自证('apply 开始')
   /** 每个会话这一轮最后的 assistant 文本 */
   const 待念 = new Map()
   /** 队列里排着的话（只留最新几条） */
@@ -1319,6 +1352,7 @@ function 取会话id(会话对象) {
     const ws = 范围.webServer
     if (!ws || typeof ws.register !== 'function') return
     注入过的端口 = () => ws.port
+    自证('webServer 到手，路由要挂了')
     范围.effect(
         () =>
           ws.register({
@@ -1367,7 +1401,8 @@ function 取会话id(会话对象) {
                 await 要新鲜的()
                 let 页
                 try {
-                  页 = 渲染设置页({
+                  const 渲染 = await 取设置页渲染器()
+                  页 = 渲染({
                     配置: cfg,
                     能力: 能力快照,
                     配置路径: 写配置过() ? 配置路() : '',
@@ -1974,6 +2009,7 @@ function 取会话id(会话对象) {
   }
 
   void (async () => {
+    自证('开机流程开始（探测 → 等身体 → 体检 → 盯菜单 → 嘀嗒）')
     await 刷新能力并记账()
     await 等身体起来()
     首启体检()
@@ -1984,7 +2020,11 @@ function 取会话id(会话对象) {
     } catch (错误) {
       记日志(ctx, `嘀嗒提醒没起来：${String((错误 && 错误.message) || 错误)}`)
     }
-  })()
+  })().catch((错误) => {
+    // 开机流程炸了不能让整个插件（连带路由和右键菜单）被回收：
+    // 落一行自证，剩下的功能照旧
+    自证(`开机流程出错：${String((错误 && 错误.message) || 错误)}`)
+  })
 
   // 能力会变（比如 5 分钟后把 SoVITS 起来了、客户端登录了），定期重新探一次
   try {
