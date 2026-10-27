@@ -1680,6 +1680,26 @@ function 取会话id(会话对象) {
     await 刷新能力并记账()
   }
 
+  /**
+   * 启动时 dsh-pet 常常还没把路由挂上（它自己要拉 Electron 窗口），
+   * 先探就必然"身体不在"。这里给它几秒，别让人第一次安装就收到一句
+   * "还没装宠物身体"——那是侮辱性误报。
+   * 2026-10-27 实测：重启后 17:34:39 探到不在，17:35:06 就好了。
+   */
+  async function 等身体起来(最多次 = 3, 间隔 = 2000) {
+    if (!能力快照.body || 能力快照.body.available) return true
+    for (let i = 0; i < 最多次; i++) {
+      await new Promise((r) => setTimeout(r, 间隔))
+      const 身 = await 探身体(身体在吗)
+      if (身.available) {
+        Object.assign(能力快照, { body: 身, 探测于: Date.now() })
+        记日志(ctx, `身体晚到了一点：等了约 ${(i + 1) * 间隔 / 1000} 秒，dsh-pet 起来了`)
+        return true
+      }
+    }
+    return false
+  }
+
   function 首启体检() {
     const 配 = 读配置()
     if (配.firstRunReport === false) return
@@ -1712,6 +1732,7 @@ function 取会话id(会话对象) {
 
   void (async () => {
     await 刷新能力并记账()
+    await 等身体起来()
     首启体检()
     try {
       启动嘀嗒提醒()
