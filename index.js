@@ -198,8 +198,11 @@ function 记日志(ctx, 文) {
     /* 日志坏了也不能影响说话 */
   }
   // 顺手落一份到 ~/.dsh/dsh-pet-voice.log：桌面壳不写应用日志，出问题时只能从这里翻
+  // 测试里别往真日志里灌：2026-10-27 跑一次 node --test，日志里就多出几条
+  // "说=不能(speak.mode=off) 听=可以" 的假探测结论，回头排查差点被自己带偏。
+  if (process.env.NODE_TEST_CONTEXT && !process.env.DSH_PET_VOICE_LOG) return
   try {
-    const 文件 = join(家目录(), 'dsh-pet-voice.log')
+    const 文件 = process.env.DSH_PET_VOICE_LOG || join(家目录(), 'dsh-pet-voice.log')
     appendFileSync(文件, `[${new Date().toISOString()}] ${文}\n`)
     if (statSync(文件).size > 256 * 1024) {
       writeFileSync(文件, readFileSync(文件, 'utf8').slice(-128 * 1024))
