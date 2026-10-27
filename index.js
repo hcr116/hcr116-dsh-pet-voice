@@ -1258,6 +1258,7 @@ function 取会话id(会话对象) {
 
               if (路 === '/doctor') {
                 // 逐条体检：装没装身体、说/听/嘀嗒各是什么状态、缺了怎么补
+                await 要新鲜的()
                 const 配置路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
                 let 有配置 = false
                 try {
@@ -1271,6 +1272,7 @@ function 取会话id(会话对象) {
 
               if (路 === '/capabilities') {
                 // 网页半边拿这个决定「按住说话」入口是正常还是置灰
+                await 要新鲜的()
                 return 回(200, {
                   ok: true,
                   探测于: 能力快照.探测于 || null,
@@ -1665,6 +1667,17 @@ function 取会话id(会话对象) {
     } catch (错误) {
       记日志(ctx, `能力探测出错：${String((错误 && 错误.message) || 错误)}`)
     }
+  }
+
+  /**
+   * 给人看的诊断口（/doctor、/capabilities）不该端上 5 分钟前的旧结论。
+   * 快照太旧就现场重探一次；20 秒内的重复请求直接吃缓存，免得被轮询打穿。
+   * 踩过：探测逻辑修好之后，体检还照样报"身体没装"，纯粹是缓存旧了。
+   */
+  async function 要新鲜的(最长旧秒 = 20) {
+    const 旧 = Date.now() - (能力快照.探测于 || 0)
+    if (能力快照.探过了 && 旧 < 最长旧秒 * 1000) return
+    await 刷新能力并记账()
   }
 
   function 首启体检() {
