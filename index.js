@@ -33,7 +33,9 @@ import { spawn } from 'node:child_process'
 import net from 'node:net'
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+
+import { 渲染设置页 } from './lib/settings-page.js'
 
 export const name = 'dsh-pet-voice'
 
@@ -155,6 +157,12 @@ export function 归一化配置(原 = {}) {
   if (原.speak && 原.speak.sovits) 合.sovits = { ...合.sovits, ...原.speak.sovits }
   if (原.speak && 原.speak.sapi) 合.sapi = { ...合.sapi, ...原.speak.sapi }
 
+  // 两条路径必须读到同一个"合并后的有效值"：
+  // 老代码读 合.sovits / 合.sapi，设置页按 speak.sovits.* / speak.sapi.* 编辑。
+  // 不把这层接上的话，只在顶层写 sovits 的配置在设置页里会显示成空白（踩过）。
+  合.speak.sovits = 合.sovits
+  合.speak.sapi = 合.sapi
+
   合.speak.mode = 三档(合.speak.mode)
   合.listen.mode = 三档(合.listen.mode)
   // 老的 dida.enabled:false 等价于现在的 mode:'off'
@@ -179,14 +187,85 @@ export function 归一化配置(原 = {}) {
   return 合
 }
 
+function 配置路() {
+  // DSH_PET_VOICE_CONFIG 只给测试用：指到临时配置，别碰真的那份
+  return process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
+}
+
+/** 配置文件存在吗（体检里"配置文件 ✅"跟设置页"还没生成"都看这个） */
+function 写配置过() {
+  try {
+    readFileSync(配置路())
+    return true
+  } catch {
+    return false
+  }
+}
+
+let 缓存版本 = null
+/** 插件自己的版本号（页脚显示，读一次就记住） */
+function 插件版本() {
+  if (缓存版本 !== null) return 缓存版本
+  try {
+    缓存版本 = String(JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version || '')
+  } catch {
+    缓存版本 = ''
+  }
+  return 缓存版本
+}
+
 function 读配置() {
   try {
-    // DSH_PET_VOICE_CONFIG 只给测试用：指到临时配置，别碰真的那份
-    const 路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
-    return 归一化配置(JSON.parse(readFileSync(路, 'utf8')))
+    return 归一化配置(JSON.parse(readFileSync(配置路(), 'utf8')))
   } catch {
     return 归一化配置({})
   }
+}
+
+/** 读**原始**配置（没归一化的那份）。写回时要基于它，不然会把一整份默认值也写进用户文件。 */
+export function 读原始配置() {
+  try {
+    const v = JSON.parse(readFileSync(配置路(), 'utf8'))
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 是不是「纯对象」（数组和 null 都不算） */
+function 是纯对象(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * 深合并补丁进原始配置：只改补丁里出现的键，其余原样保留。
+ *
+ * 设置页传来的补丁就是这种嵌套形状（`{speak:{provider:'sapi'}}`），
+ * 这样"只保存我改过的字段"才不会把用户手写的其它配置冲掉。
+ * 值为 null 表示删掉这个键（设置页目前没用到，但语义得先说清楚）。
+ */
+export function 合并配置(原, 补丁) {
+  const 底 = 是纯对象(原) ? { ...原 } : {}
+  if (!是纯对象(补丁)) return 底
+  for (const [k, v] of Object.entries(补丁)) {
+    if (v === null) {
+      delete 底[k]
+    } else if (是纯对象(v)) {
+      底[k] = 合并配置(底[k], v)
+    } else {
+      底[k] = v
+    }
+  }
+  return 底
+}
+
+/** 把补丁写回配置文件，返回写完的归一化配置。写盘失败会抛（让路由回 500 而不是假装成功）。 */
+export function 存配置补丁(补丁) {
+  const 新 = 合并配置(读原始配置(), 补丁)
+  const 路 = 配置路()
+  mkdirSync(dirname(路), { recursive: true })
+  writeFileSync(路, JSON.stringify(新, null, 2) + '\n', 'utf8')
+  return 归一化配置(新)
 }
 
 function 记日志(ctx, 文) {
@@ -985,6 +1064,10 @@ export const __test = {
   // 能力开关
   三档,
   归一化配置,
+  合并配置,
+  读原始配置,
+  存配置补丁,
+  配置路,
   探说,
   探听,
   探活地址,
@@ -1256,21 +1339,13 @@ function 取会话id(会话对象) {
               const cfg = 读配置()
 
               if (路 === '/' || 路 === '') {
-                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/doctor', '/capabilities', '/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
+                return 回(200, { ok: true, 说明: 'dsh-pet-voice', 路口: ['/settings', '/config', '/doctor', '/capabilities', '/state', '/events', '/say', '/dida', '/stt', '/stt/status', '/focus'] })
               }
 
               if (路 === '/doctor') {
                 // 逐条体检：装没装身体、说/听/嘀嗒各是什么状态、缺了怎么补
                 await 要新鲜的()
-                const 配置路 = process.env.DSH_PET_VOICE_CONFIG || join(家目录(), 'dsh-pet-voice.json')
-                let 有配置 = false
-                try {
-                  readFileSync(配置路)
-                  有配置 = true
-                } catch {
-                  /* 没写过就是全默认 */
-                }
-                return 回(200, 体检清单(能力快照, cfg, 有配置 ? 配置路 : ''))
+                return 回(200, 体检清单(能力快照, cfg, 写配置过() ? 配置路() : ''))
               }
 
               if (路 === '/capabilities') {
@@ -1285,6 +1360,59 @@ function 取会话id(会话对象) {
                   dida: 能力快照.dida,
                   文案: 体检文案(能力快照),
                 })
+              }
+
+              if (路 === '/settings') {
+                // 右键桌宠 →「更多」→「设置…」就在浏览器里打开这一页
+                await 要新鲜的()
+                let 页
+                try {
+                  页 = 渲染设置页({
+                    配置: cfg,
+                    能力: 能力快照,
+                    配置路径: 写配置过() ? 配置路() : '',
+                    版本: 插件版本(),
+                    发现: { 滴答凭证: !!(能力快照.dida && 能力快照.dida.available) },
+                  })
+                } catch (错误) {
+                  return 回(500, { ok: false, error: `设置页没渲染出来：${String((错误 && 错误.message) || 错误)}` })
+                }
+                try {
+                  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+                  res.end(页)
+                } catch {
+                  /* 对端断了 */
+                }
+                return
+              }
+
+              if (路 === '/config') {
+                if (req.method === 'GET') {
+                  return 回(200, { ok: true, 归一化: cfg, 原始: 读原始配置(), 路径: 配置路() })
+                }
+                if (req.method === 'POST') {
+                  const 体 = await 读体(req, 256 * 1024)
+                  let 补丁
+                  try {
+                    补丁 = JSON.parse(体.toString('utf8') || '{}')
+                  } catch {
+                    return 回(400, { ok: false, error: 'body 不是合法 JSON' })
+                  }
+                  if (!补丁 || typeof 补丁 !== 'object' || Array.isArray(补丁)) {
+                    return 回(400, { ok: false, error: 'body 必须是一个 JSON 对象（只放改动的字段）' })
+                  }
+                  let 新配
+                  try {
+                    新配 = 存配置补丁(补丁)
+                  } catch (错误) {
+                    return 回(500, { ok: false, error: `写配置文件失败：${String((错误 && 错误.message) || 错误)}` })
+                  }
+                  // 改完立刻重探：设置页保存后马上能看到「现在到底可不可用」
+                  await 刷新能力并记账()
+                  记日志(ctx, `配置改了：${Object.keys(补丁).join('、')}`)
+                  return 回(200, { ok: true, 配置: 新配, 能力: 能力快照 })
+                }
+                return 回(405, { ok: false, error: '只支持 GET / POST' })
               }
 
               if (路 === '/dida') {
@@ -1456,6 +1584,118 @@ function 取会话id(会话对象) {
     else 挂路由(ctx)
   } catch {
     /* 没有 webServer 就只做被动念，不影响启动 */
+  }
+
+  // ---------- 右键菜单：把自己挂进 dsh-pet 的「更多」 ----------
+  //
+  // dsh-pet 给第三方留了一个菜单注册表（见它 src/host/menu.ts）：
+  //   POST   /dsh-pet-7340/menu/item     {owner, labels}   注册（该 owner 整体覆盖）
+  //   GET    /dsh-pet-7340/menu/events    ?owner=&wait=ms  查点击（**读取即消费**）
+  // 它的表在**进程内存**里，DSH/dsh-pet 一重启就空：所以每次启动都要重新注册，
+  // 而 /menu/events 回 `unknown-owner` 就是"该重注册了"的信号。
+  // 我们只挂一项，于是菜单里是 右键 →「更多」→「设置…」（1 项时不套 owner 那层）。
+  const 菜单主 = 'dsh-pet-voice'
+  const 菜单项 = '设置…'
+
+  /** 本插件自己的基址（设置页就跑在同一个 webServer 上） */
+  function 本插件基址() {
+    const 基 = 宠物基址(ctx, 读配置())
+    return 基 ? `${基.replace(/\/dsh-pet-7340\/?$/, '')}/dsh-pet-voice` : null
+  }
+
+  /** 注册（幂等；失败只当"身体还没起"，不吵人） */
+  async function 注册菜单() {
+    const 基 = 宠物基址(ctx, 读配置())
+    if (!基) return false
+    try {
+      const 回 = await fetch(`${基}/menu/item`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ owner: 菜单主, labels: [菜单项] }),
+        signal: AbortSignal.timeout(3000),
+      })
+      const j = await 回.json().catch(() => null)
+      if (j && j.ok) return true
+      记日志(ctx, `右键菜单没挂上：${(j && (j.message || j.reason)) || `HTTP ${回.status}`}`)
+    } catch {
+      /* 身体没起：盯菜单的循环过几秒再试 */
+    }
+    return false
+  }
+
+  /** 打开设置页。桌宠窗口是 dsh-pet 的地盘，我们能开的就是系统浏览器。 */
+  function 打开设置页() {
+    const 基 = 本插件基址()
+    if (!基) {
+      记日志(ctx, '设置页打不开：拿不到 DSH 的端口')
+      return
+    }
+    const 址 = `${基}/settings`
+    try {
+      if (process.platform === 'win32') {
+        // 走 cmd 的 start：Windows 上直接 spawn 一个 URL 是打不开的
+        spawn('cmd.exe', ['/c', 'start', '', 址], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+      } else if (process.platform === 'darwin') {
+        spawn('open', [址], { detached: true, stdio: 'ignore' }).unref()
+      } else {
+        spawn('xdg-open', [址], { detached: true, stdio: 'ignore' }).unref()
+      }
+      记日志(ctx, `设置页已打开：${址}`)
+    } catch (错误) {
+      记日志(ctx, `打开设置页失败：${String((错误 && 错误.message) || 错误)}（地址：${址}）`)
+    }
+  }
+
+  let 菜单停 = false
+
+  /** 一直挂着长轮询等点击（wait 上限 10s，这里给 8s，别把它那端挂满） */
+  async function 盯菜单() {
+    let 已注册 = await 注册菜单()
+    while (!菜单停) {
+      try {
+        const 基 = 宠物基址(ctx, 读配置())
+        if (!基) {
+          await 睡(2000)
+          continue
+        }
+        if (!已注册) {
+          已注册 = await 注册菜单()
+          if (!已注册) {
+            await 睡(3000)
+            continue
+          }
+        }
+        const 回 = await fetch(`${基}/menu/events?owner=${encodeURIComponent(菜单主)}&wait=8000`, {
+          signal: AbortSignal.timeout(12000),
+        })
+        const j = await 回.json().catch(() => null)
+        if (!j) {
+          await 睡(1000)
+          continue
+        }
+        // 注册表没了（dsh-pet 自己重启过）→ 重新注册再来
+        if (j.ok === false && j.reason === 'unknown-owner') {
+          已注册 = false
+          continue
+        }
+        const 事件 = j.events || {}
+        if (事件[菜单项]) 打开设置页()
+      } catch {
+        // 连不上（身体没起 / 刚重启）：交给下一轮重注册
+        已注册 = false
+        await 睡(4000)
+      }
+    }
+  }
+
+  try {
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => () => {
+        菜单停 = true
+      }, 'dsh-pet-voice: 右键菜单')
+    }
+  } catch {
+    /* 没有 effect 就算了 */
   }
 
   // 宠物自己的对话框（右键桌宠那个）：它不走 DSH 会话，只能盯气泡
@@ -1737,6 +1977,8 @@ function 取会话id(会话对象) {
     await 刷新能力并记账()
     await 等身体起来()
     首启体检()
+    // 身体在才挂得上右键菜单；不在的话 盯菜单 自己会重试到它起来
+    void 盯菜单()
     try {
       启动嘀嗒提醒()
     } catch (错误) {
