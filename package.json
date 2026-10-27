@@ -34,7 +34,7 @@
     "license":  "MIT",
     "repository":  {
                        "type":  "git",
-                       "url":  "git@github.com:hcr116/dsh-pet-voice.git"
+                       "url":  "git@github.com:hcr116/hcr116-dsh-pet-voice.git"
                    },
     "description":  "把 DSH 的回答念给 dsh-pet 听；带语音输入与滴答清单到点提醒。能力全部可开关，给别人的机器也能用。"
 }

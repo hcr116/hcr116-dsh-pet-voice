@@ -61,7 +61,7 @@ dsh-pet 负责「身体」（形象、动画、气泡、位置），本插件只
 
 ```bash
 # 从仓库装（推荐给别人用）
-dsh plugin --profile desktop add "github:hcr116/dsh-pet-voice"
+dsh plugin --profile desktop add "github:hcr116/hcr116-dsh-pet-voice"
 
 # 本地开发时直接装目录
 dsh plugin --profile desktop add "C:/Users/<你>/.dsh/plugins/dsh-pet-voice"
